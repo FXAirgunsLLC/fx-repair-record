@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FX Repair Record (test)</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0f1214;--surface:#171b1f;--raised:#1f2429;--line:#2c3238;--line2:#3a4148;
+  --text:#e6e8eb;--muted:#a3abb5;--dim:#8b939d;
+  --teal:#50c8c0;--teal-dk:#1f3535;--teal-soft:#7fdcd6;
+  --warn:#f2c94c;--warn-soft:rgba(242,201,76,.14);
+  --red:#e27b6b;--red-soft:rgba(226,123,107,.14);
+  --blue:#6fa9e6;--blue-soft:rgba(111,169,230,.14);
+  --r:8px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5;min-height:100vh}
+.num{font-family:'Barlow Condensed',sans-serif;font-weight:700}
+button{font:inherit;cursor:pointer}
+input,select,textarea{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line2);border-radius:6px;padding:8px 10px;width:100%}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--teal)}
+button:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+textarea{resize:vertical;min-height:70px}
+.btn{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 14px;border-radius:6px;border:1px solid var(--line2);background:var(--raised);color:var(--text);font-weight:600}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--teal);border-color:var(--teal);color:#0f1214}
+.btn.ghost{background:transparent}
+.btn.sm{min-height:34px;padding:0 10px;font-size:13px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.top{position:sticky;top:0;z-index:20;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 22px;height:56px}
+.brand{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:22px}
+.testtag{font-size:11px;font-weight:700;letter-spacing:.06em;background:var(--warn);color:#1a1608;border-radius:4px;padding:2px 7px}
+.top .grow{flex:1}
+.user{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:8px}
+main{max-width:1360px;margin:0 auto;padding:22px 24px 60px}
+h1{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:32px;line-height:1.1}
+h2{font-size:15px;font-weight:700}
+.lede{color:var(--muted);margin:4px 0 16px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
+.tab{min-height:42px;padding:0 14px;border:0;background:transparent;color:var(--muted);font-weight:600}
+.tab.on{color:var(--text);box-shadow:inset 0 -3px 0 var(--teal)}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.filters input{max-width:340px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:12px;font-weight:600;color:var(--dim);padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr.row{cursor:pointer}
+tr.row:hover td{background:var(--surface)}
+.pill{display:inline-block;font-size:12px;font-weight:600;border-radius:12px;padding:2px 9px;white-space:nowrap;background:var(--raised);color:var(--muted)}
+.pill.step{background:var(--teal-dk);color:var(--teal-soft)}
+.pill.hold{background:var(--warn-soft);color:var(--warn)}
+.pill.late{background:var(--red-soft);color:var(--red)}
+.pill.test{background:var(--warn);color:#1a1608}
+.muted{color:var(--muted)}
+.empty{padding:28px;text-align:center;color:var(--muted);background:var(--surface);border:1px dashed var(--line2);border-radius:var(--r)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.stages{display:flex;flex-wrap:wrap;gap:6px}
+.stage{display:flex;flex-direction:column;padding:8px 12px;border-radius:6px;min-width:108px;background:#1a1e22;color:var(--muted);border:1px solid var(--line)}
+.stage b{font-size:13px}
+.stage span{font-size:11px;opacity:.9}
+.stage.done{background:var(--teal-dk);color:var(--teal-soft);border-color:#2f5a57}
+.stage.now{background:var(--teal);color:#0f1214;border-color:var(--teal)}
+.clock{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px}
+.track{flex:1 1 260px;height:10px;background:var(--line);border-radius:5px;overflow:hidden}
+.track div{height:100%;background:var(--teal)}
+.track.late div{background:var(--red)}
+.track.warn div{background:var(--warn)}
+.layout{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start;margin-top:18px}
+.mainc{flex:999 1 560px;min-width:0;display:flex;flex-direction:column;gap:14px}
+.side{flex:1 1 320px;display:flex;flex-direction:column;gap:14px}
+.f{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-bottom:1px solid var(--line)}
+.f .lab{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted)}
+.f .src{font-size:11px;color:var(--teal-soft)}
+.f.miss{background:var(--warn-soft);border:1px solid var(--warn);border-radius:6px;padding:8px 10px;margin:4px -10px}
+.f.miss .src{color:var(--warn);font-weight:700}
+.f input,.f textarea,.f select{background:transparent;border:1px solid transparent;padding:4px 6px;margin-left:-6px;font-weight:600}
+.f input:hover,.f textarea:hover,.f select:hover{border-color:var(--line2)}
+.f input:focus,.f textarea:focus,.f select:focus{border-color:var(--teal);background:var(--bg)}
+.f textarea{min-height:64px;font-weight:500}
+.soon{border:1px dashed var(--line2);border-radius:8px;padding:22px;color:var(--muted);text-align:center}
+.hist li{list-style:none;font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)}
+.hist li:last-child{border-bottom:0}
+.hist .when{color:var(--dim);font-size:12px}
+.holdbox{background:var(--warn-soft);border:1px solid var(--warn);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.note{font-size:12px;color:var(--dim)}
+.modal-wrap{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:60;display:none;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px}
+.modal-wrap.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--line2);border-radius:10px;width:min(560px,100%);padding:20px 22px;display:flex;flex-direction:column;gap:12px}
+label.l{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--raised);border:1px solid var(--line2);padding:10px 16px;border-radius:8px;font-size:13px;z-index:100;display:none;max-width:90vw}
+#toast.show{display:block}
+#toast.err{border-color:var(--red);color:var(--red)}
+#auth{position:fixed;inset:0;background:var(--bg);z-index:999;display:flex;align-items:center;justify-content:center}
+#auth.hidden{display:none}
+.auth-box{background:var(--surface);border:1px solid var(--line2);border-radius:10px;padding:30px;width:320px;display:flex;flex-direction:column;gap:10px}
+.auth-err{color:var(--red);font-size:12px;min-height:14px;text-align:center}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="auth"><div class="auth-box">
+  <h1 style="text-align:center;font-size:26px;">Repair Record</h1>
+  <input type="email" id="auth-email" placeholder="Email" autocomplete="username">
+  <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+  <button class="btn primary" id="auth-btn" onclick="signIn()" style="justify-content:center;">Sign in</button>
+  <div class="auth-err" id="auth-err"></div>
+</div></div>
+
+<header class="top">
+  <span class="brand">Repair Record</span><span class="testtag">TEST</span>
+  <span class="grow"></span>
+  <div class="user"><span id="user-email"></span><button class="btn sm ghost" onclick="signOut()">Log out</button></div>
+</header>
+<main id="view"></main>
+
+<div class="modal-wrap" id="modal"><div class="modal" id="modal-body"></div></div>
+<div id="toast"></div>
+
+<script>
+// ── CONFIG ──────────────────────────────────────────────
+const SB_URL = 'https://rhvmzaljkgqnwjcstnen.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJodm16YWxqa2dxbndqY3N0bmVuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MTA0OTksImV4cCI6MjA5NzI4NjQ5OX0.3qPGkA9tyvTDWqPQrBjJUnp9_PzNxBJQ-NCv2dUo2DE';
+const sb = window.supabase.createClient(SB_URL, SB_KEY);
+const SERVER = 'https://fx-tracking-server.onrender.com';
+const STEPS = ['Received', 'Assessment', 'Quote', 'Repair', 'Testing', 'QC', 'Ready to ship', 'Shipped'];
+const HOLD_REASONS = ['Waiting on customer approval', 'Waiting on parts from Sweden', 'Waiting on payment', 'Needs more diagnosis', 'Shop backlog', 'Other'];
+const CLOCK_DAYS = 14;
+const FIELDS = [
+  ['customer_name', 'Customer'], ['email', 'Email'], ['phone', 'Phone'], ['address', 'Address'],
+  ['model', 'Model'], ['serial_number', 'Serial #'], ['caliber', 'Caliber'], ['barrel_length', 'Barrel length'],
+  ['warranty', 'Warranty'], ['freshdesk_ticket', 'Freshdesk #'], ['issue', 'What the customer told us']
+];
+const DAY = 86400000;
+
+// ── STATE ───────────────────────────────────────────────
+let me = '', tickets = [], records = [], view = 'list', listTab = 'queue', q = '', openRecordId = null, events = [];
+
+// ── HELPERS ─────────────────────────────────────────────
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function fmtDate(iso) { return iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''; }
+function fmtDT(iso) { return iso ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''; }
+let toastT = null;
+function toast(m, err) { const t = document.getElementById('toast'); t.textContent = m; t.className = 'show' + (err ? ' err' : ''); clearTimeout(toastT); toastT = setTimeout(() => t.className = '', err ? 6000 : 2600); }
+function nameOf(email) { const n = String(email || '').split('@')[0].split('.')[0]; return n ? n.charAt(0).toUpperCase() + n.slice(1) : ''; }
+function dateToIso(d) { return d ? new Date(d + 'T12:00:00').toISOString() : null; }
+function isoToDate(iso) { if (!iso) return ''; const d = new Date(iso); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+// "DRS MkII (.30)" → { model: 'DRS MkII', cal: '.30' }
+function splitModel(m) { m = String(m || '').trim(); const k = m.match(/^(.*?)\s*\(([^)]*)\)\s*$/); return k ? { model: k[1].trim(), cal: k[2].trim() } : { model: m, cal: '' }; }
+function rqWarranty(w) { w = String(w || '').toLowerCase(); return (w === 'warr' || w === 'warranty') ? 'Yes' : w === 'oop' ? 'No' : ''; }
+
+// 14-day clock. Never pauses; stops when the rifle has shipped.
+function clockOf(r) {
+  if (!r || !r.received_at) return null;
+  const start = new Date(r.received_at).getTime();
+  const end = r.step === 'Shipped' && r.step_times && r.step_times.Shipped ? new Date(r.step_times.Shipped).getTime() : Date.now();
+  const day = Math.max(1, Math.floor((end - start) / DAY) + 1);
+  return { day, due: new Date(start + CLOCK_DAYS * DAY), late: day > CLOCK_DAYS, warn: day >= 10 && day <= CLOCK_DAYS, done: r.step === 'Shipped' };
+}
+function recordFor(t) { return records.find(r => String(r.repair_ticket_id) === String(t.id)); }
+
+// ── DATA ────────────────────────────────────────────────
+async function loadAll() {
+  const [a, b] = await Promise.all([
+    sb.from('repair_tickets').select('id,customer_name,ticket_number,model,serial_number,customer_email,customer_phone,customer_address,warranty,arrived_date,status,location,archived').eq('archived', false).order('id', { ascending: false }),
+    sb.from('rr_records').select('*').order('created_at', { ascending: false })
+  ]);
+  if (a.error) throw a.error;
+  if (b.error) throw b.error;
+  tickets = a.data || []; records = b.data || [];
+}
+async function loadEvents(id) {
+  const { data } = await sb.from('rr_events').select('*').eq('record_id', id).order('at', { ascending: false });
+  events = data || [];
+}
+async function logEvent(recordId, kind, text, minutes) {
+  try { await sb.from('rr_events').insert({ record_id: recordId, by_email: me, kind, text, minutes: minutes == null ? null : minutes }); } catch (e) {}
+}
+
+// ── LIST ────────────────────────────────────────────────
+function render() { if (view === 'record') renderRecord(); else renderList(); }
+function renderList() {
+  view = 'list';
+  const v = document.getElementById('view');
+  v.innerHTML = `<div class="bar" style="justify-content:space-between;align-items:flex-end;">
+      <div><h1>Repairs</h1><p class="lede">Test version. It reads the Repair Queue but never changes it.</p></div>
+      <button class="btn primary" onclick="openNewTest()">New test repair</button></div>
+    <div class="tabs">
+      <button class="tab ${listTab === 'queue' ? 'on' : ''}" onclick="listTab='queue';renderList()">Repair Queue repairs</button>
+      <button class="tab ${listTab === 'test' ? 'on' : ''}" onclick="listTab='test';renderList()">Test repairs</button>
+    </div>
+    <div class="filters"><input id="q" placeholder="Search ticket #, customer, model, serial" value="${esc(q)}" oninput="q=this.value;renderRows()"></div>
+    <div id="rows"></div>`;
+  renderRows();
+}
+function stepCell(r) {
+  if (!r) return '<span class="pill">Not started</span>';
+  const c = clockOf(r);
+  let h = `<span class="pill step">${esc(r.step || 'Received')}</span>`;
+  if (r.hold_reason) h += ` <span class="pill hold">On hold</span>`;
+  if (c) h += ` <span class="pill ${c.late ? 'late' : ''}">${c.done ? c.day + ' days total' : 'Day ' + c.day + ' of ' + CLOCK_DAYS}</span>`;
+  return h;
+}
+function renderRows() {
+  const el = document.getElementById('rows'); if (!el) return;
+  const s = q.trim().toLowerCase();
+  const hit = (...xs) => !s || xs.join(' ').toLowerCase().includes(s);
+  if (listTab === 'queue') {
+    const list = tickets.filter(t => hit(t.ticket_number, t.customer_name, t.model, t.serial_number));
+    if (!list.length) { el.innerHTML = '<div class="empty">No Repair Queue repairs match.</div>'; return; }
+    el.innerHTML = `<table><thead><tr><th>Ticket #</th><th>Customer</th><th>Model</th><th>Repair Queue</th><th>Repair Record</th></tr></thead><tbody>` +
+      list.map(t => `<tr class="row" onclick="openFromTicket(${Number(t.id)})"><td class="num" style="font-size:19px;color:var(--teal);">#${esc(t.ticket_number || '—')}</td>
+        <td>${esc(t.customer_name)}</td><td>${esc(t.model)}</td><td class="muted">${esc(t.status || '')}${t.location === 'nc' ? ' · Newman' : ''}</td><td>${stepCell(recordFor(t))}</td></tr>`).join('') + '</tbody></table>';
+  } else {
+    const list = records.filter(r => r.is_test && hit(r.freshdesk_ticket, r.customer_name, r.model, r.serial_number));
+    if (!list.length) { el.innerHTML = '<div class="empty">No test repairs yet. Use “New test repair” to make one.</div>'; return; }
+    el.innerHTML = `<table><thead><tr><th>Freshdesk #</th><th>Customer</th><th>Model</th><th>Repair Record</th></tr></thead><tbody>` +
+      list.map(r => `<tr class="row" onclick="openRecord('${r.id}')"><td class="num" style="font-size:19px;color:var(--teal);">${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) : '—'}</td>
+        <td>${esc(r.customer_name)} <span class="pill test">TEST</span></td><td>${esc(r.model)}</td><td>${stepCell(r)}</td></tr>`).join('') + '</tbody></table>';
+  }
+}
+
+// ── OPEN / CREATE ───────────────────────────────────────
+async function openFromTicket(ticketId) {
+  const t = tickets.find(x => Number(x.id) === Number(ticketId)); if (!t) return;
+  let r = recordFor(t);
+  if (!r) {
+    const sm = splitModel(t.model);
+    const row = {
+      repair_ticket_id: t.id, is_test: false, freshdesk_ticket: String(t.ticket_number || '').replace(/[^0-9]/g, '') || null,
+      customer_name: t.customer_name || null, email: t.customer_email || null, phone: t.customer_phone || null, address: t.customer_address || null,
+      model: sm.model || null, serial_number: t.serial_number || null, caliber: sm.cal || null, warranty: rqWarranty(t.warranty) || null,
+      received_at: dateToIso(t.arrived_date), created_by: me, step: 'Received'
+    };
+    const sources = {};
+    Object.keys(row).forEach(k => { if (row[k] && FIELDS.some(f => f[0] === k)) sources[k] = 'Repair Queue'; });
+    if (row.received_at) sources.received_at = 'Repair Queue';
+    row.sources = sources;
+    row.step_times = row.received_at ? { Received: row.received_at } : {};
+    const { data, error } = await sb.from('rr_records').insert(row).select().single();
+    if (error) { if (error.code === '23505') { await loadAll(); r = recordFor(t); } else return toast('Could not start the record: ' + error.message, true); }
+    else { r = data; records.unshift(r); await logEvent(r.id, 'created', 'Repair Record started from Repair Queue card #' + (t.ticket_number || t.id)); prefill(r.id, true); }
+  }
+  openRecord(r.id);
+}
+function openNewTest() {
+  document.getElementById('modal-body').innerHTML = `<h2>New test repair</h2>
+    <p class="note">Only exists in this test app. Use a real Freshdesk ticket # to see page 1 fill itself.</p>
+    <label class="l">Freshdesk ticket #<input id="n-ticket" placeholder="e.g. 34295"></label>
+    <label class="l">Customer (optional if the ticket has it)<input id="n-cust"></label>
+    <label class="l">Model<input id="n-model" placeholder="Fills in from the serial if left blank"></label>
+    <label class="l">Serial #<input id="n-serial"></label>
+    <label class="l">Date received<input id="n-rec" type="date" value="${isoToDate(new Date().toISOString())}"></label>
+    <div class="bar"><button class="btn primary" id="n-save" onclick="createTest()">Create test repair</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
+  document.getElementById('modal').classList.add('open');
+  setTimeout(() => document.getElementById('n-ticket').focus(), 30);
+}
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+async function createTest() {
+  const v = id => document.getElementById(id).value.trim();
+  const row = { is_test: true, freshdesk_ticket: v('n-ticket').replace(/[^0-9]/g, '') || null, customer_name: v('n-cust') || null, model: v('n-model') || null,
+    serial_number: v('n-serial') || null, received_at: dateToIso(v('n-rec')), created_by: me, step: 'Received' };
+  if (!row.freshdesk_ticket && !row.customer_name) return toast('Enter a Freshdesk ticket # or a customer name.', true);
+  const sources = {}; ['customer_name', 'model', 'serial_number', 'freshdesk_ticket'].forEach(k => { if (row[k]) sources[k] = 'Typed in'; });
+  row.sources = sources; row.step_times = row.received_at ? { Received: row.received_at } : {};
+  document.getElementById('n-save').disabled = true;
+  const { data, error } = await sb.from('rr_records').insert(row).select().single();
+  if (error) { document.getElementById('n-save').disabled = false; return toast('Could not create it: ' + error.message, true); }
+  records.unshift(data); closeModal();
+  await logEvent(data.id, 'created', 'Test repair created');
+  listTab = 'test';
+  openRecord(data.id);
+  prefill(data.id, true);
+}
+
+// ── PREFILL (Freshdesk + AI + serial lookup) ────────────
+let prefillBusy = false;
+async function prefill(id, quiet) {
+  const r = records.find(x => x.id === id); if (!r || prefillBusy) return;
+  prefillBusy = true; setPrefillStatus('Reading the Freshdesk ticket and the serial lookup… (can take up to a minute)');
+  try {
+    const { data: s } = await sb.auth.getSession();
+    const token = s && s.session ? s.session.access_token : '';
+    const known = {}; FIELDS.forEach(([k]) => { if (r[k]) known[k] = r[k]; });
+    const res = await fetch(SERVER + '/repair-record-prefill', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ ticket: r.freshdesk_ticket || '', serial: r.serial_number || '', known }) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || 'failed (' + res.status + ')');
+    const cur = records.find(x => x.id === id) || r;
+    const patch = {}, sources = Object.assign({}, cur.sources || {});
+    const filled = [];
+    Object.keys(out.fields || {}).forEach(k => {
+      if (!FIELDS.some(f => f[0] === k)) return;
+      const src = out.sources[k], val = out.fields[k];
+      const edited = (sources[k] || '') === 'Edited';
+      // Fill empty fields. Serial lookup beats other sources for model/caliber; the ticket decides warranty.
+      const override = !edited && ((src === 'Serial lookup' && (k === 'model' || k === 'caliber')) || (k === 'warranty' && src === 'Freshdesk thread'));
+      if ((!cur[k] || override) && String(cur[k] || '') !== val) { patch[k] = val; sources[k] = src; filled.push(k); }
+    });
+    if (Object.keys(patch).length) {
+      patch.sources = sources;
+      const { data, error } = await sb.from('rr_records').update(patch).eq('id', id).select().single();
+      if (error) throw error;
+      Object.assign(cur, data);
+      await logEvent(id, 'prefill', 'Filled automatically: ' + filled.map(k => FIELDS.find(f => f[0] === k)[1]).join(', '));
+    }
+    const msg = (filled.length ? 'Filled ' + filled.length + ' field' + (filled.length > 1 ? 's' : '') + ' automatically.' : 'Nothing new to fill in.') + ((out.notes || []).length ? ' ' + out.notes.join(' ') : '');
+    setPrefillStatus(msg);
+    if (!quiet || filled.length) toast(filled.length ? 'Page 1 updated' : 'Nothing new to fill in');
+  } catch (e) {
+    setPrefillStatus('Could not fill automatically (' + e.message + '). You can type the details in.');
+  } finally {
+    prefillBusy = false;
+    if (view === 'record' && openRecordId === id) renderRecord(true);
+  }
+}
+let prefillMsg = '';
+function setPrefillStatus(m) { prefillMsg = m; const el = document.getElementById('prefill-status'); if (el) el.textContent = m; }
+
+// ── RECORD ──────────────────────────────────────────────
+async function openRecord(id) {
+  openRecordId = id; view = 'record'; prefillMsg = '';
+  await loadEvents(id);
+  renderRecord();
+  window.scrollTo(0, 0);
+}
+function renderRecord(keepScroll) {
+  const r = records.find(x => x.id === openRecordId);
+  const v = document.getElementById('view');
+  if (!r) { v.innerHTML = '<div class="empty">This record no longer exists.</div>'; return; }
+  const y = window.scrollY;
+  const c = clockOf(r);
+  const si = Math.max(0, STEPS.indexOf(r.step));
+  const st = r.step_times || {};
+  const next = STEPS[si + 1];
+  let h = `<div class="bar" style="justify-content:space-between;">
+      <div><a href="#" onclick="backToList();return false;" style="color:var(--teal);font-size:13px;text-decoration:none;">← Repairs</a>
+      <h1>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) + ' · ' : ''}${esc(r.customer_name || 'Unknown customer')}${r.model ? ' · ' + esc(r.model) : ''} ${r.is_test ? '<span class="pill test" style="vertical-align:middle;">TEST</span>' : ''}</h1></div>
+      <div class="bar"><button class="btn" disabled title="Comes in install 4">Preview report</button><button class="btn" disabled title="Comes in install 4">Send Service Report</button></div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}"><b>${s}</b><span>${st[s] ? fmtDate(st[s]) : (i === si ? 'now' : '')}</span></div>`).join('')}</div>
+      ${c ? `<div class="clock"><div class="track ${c.late ? 'late' : c.warn ? 'warn' : ''}"><div style="width:${Math.min(100, c.day / CLOCK_DAYS * 100)}%"></div></div>
+        <b>${c.done ? 'Shipped on day ' + c.day : 'Day ' + c.day + ' of ' + CLOCK_DAYS}</b><span class="muted">Received ${fmtDate(r.received_at)} · due ${fmtDate(c.due.toISOString())}${c.late && !c.done ? ' · late' : ''}</span></div>`
+        : `<div class="clock"><span class="muted">The 14-day clock starts when the rifle is received.</span><input type="date" id="rec-date" value="${isoToDate(new Date().toISOString())}" style="width:auto;"><button class="btn sm" onclick="setReceived()">Mark received</button></div>`}
+      <div class="bar" style="margin-top:12px;">
+        ${si > 0 ? `<button class="btn sm ghost" onclick="moveStep(-1)">← Back to ${esc(STEPS[si - 1])}</button>` : ''}
+        ${next ? `<button class="btn sm primary" onclick="moveStep(1)" ${!r.received_at ? 'disabled title="Mark it received first"' : ''}>Move to ${esc(next)} →</button>` : ''}
+        ${r.step === 'Assessment' ? `<button class="btn sm" onclick="skipQuote()">Skip quote (warranty) → Repair</button>` : ''}
+        ${!r.hold_reason ? `<button class="btn sm" onclick="openHold()">Put on hold</button>` : ''}
+      </div>
+      ${r.hold_reason ? `<div class="holdbox" style="margin-top:12px;"><b>On hold: ${esc(r.hold_reason)}</b><span class="note" style="color:var(--warn);">Since ${fmtDT(r.hold_since)}. The 14-day clock keeps running.</span><div><button class="btn sm" onclick="resumeHold()">Resume work</button></div></div>` : ''}
+    </div>
+    <div class="layout">
+      <div class="mainc">
+        <div class="tabs" style="margin-bottom:0;">${['Assessment', 'Work performed', 'Testing', 'QC', 'Report'].map((t, i) => `<button class="tab ${i === 0 ? 'on' : ''}" disabled>${t}</button>`).join('')}</div>
+        <div class="soon"><b style="color:var(--text);">Assessment, work, testing and QC</b><br>Mathias’s form with photos and “Rewrite for customer” arrive in install 2, testing in install 3, QC and the Service Report in install 4.<br>For now, use the steps above to try the flow and the 14-day clock.</div>
+        <div class="card"><h2 style="margin-bottom:8px;">History</h2><ul class="hist">${events.length ? events.map(e => `<li>${esc(e.text)}<div class="when">${esc(e.by_email === 'system' ? 'Automatic' : nameOf(e.by_email))}, ${fmtDT(e.at)}</div></li>`).join('') : '<li class="muted">No history yet.</li>'}</ul></div>
+      </div>
+      <div class="side">
+        <div class="card">
+          <div class="bar" style="justify-content:space-between;margin-bottom:6px;"><h2>Report page 1</h2><button class="btn sm" onclick="prefill('${r.id}')">Refill from Freshdesk</button></div>
+          <div class="note" id="prefill-status">${esc(prefillMsg || 'Fills itself from the Repair Queue, Freshdesk and the serial lookup. Click any value to edit it.')}</div>
+          ${FIELDS.map(([k, label]) => fieldHtml(r, k, label)).join('')}
+          ${fieldHtml(r, '__received', 'Date received')}
+        </div>
+      </div>
+    </div>`;
+  v.innerHTML = h;
+  if (keepScroll) window.scrollTo(0, y);
+}
+function fieldHtml(r, k, label) {
+  const src = (r.sources || {})[k === '__received' ? 'received_at' : k] || '';
+  const val = k === '__received' ? isoToDate(r.received_at) : (r[k] || '');
+  const miss = !val && k !== 'address';   // address may legitimately be blank
+  const tag = miss ? 'Needs you' : src;
+  let input;
+  if (k === 'warranty') input = `<select onchange="saveField('${k}', this.value)"><option value="">— Not set —</option><option ${val === 'Yes' ? 'selected' : ''}>Yes</option><option ${val === 'No' ? 'selected' : ''}>No</option></select>`;
+  else if (k === 'issue') input = `<textarea onchange="saveField('${k}', this.value)" placeholder="Customer-facing summary of the problem">${esc(val)}</textarea>`;
+  else if (k === '__received') input = `<input type="date" value="${esc(val)}" onchange="setReceived(this.value)">`;
+  else input = `<input value="${esc(val)}" onchange="saveField('${k}', this.value)" placeholder="Not found">`;
+  return `<div class="f ${miss ? 'miss' : ''}"><div class="lab"><span>${esc(label)}</span><span class="src">${esc(tag)}</span></div>${input}</div>`;
+}
+function backToList() { view = 'list'; openRecordId = null; renderList(); }
+
+// ── EDITS & STEPS ───────────────────────────────────────
+async function patchRecord(patch) {
+  const r = records.find(x => x.id === openRecordId); if (!r) return null;
+  const { data, error } = await sb.from('rr_records').update(patch).eq('id', r.id).select().single();
+  if (error) { toast('Could not save: ' + error.message, true); return null; }
+  Object.assign(r, data); return r;
+}
+async function saveField(k, value) {
+  const r = records.find(x => x.id === openRecordId); if (!r) return;
+  value = String(value || '').trim() || null;
+  if ((r[k] || null) === value) return;
+  const sources = Object.assign({}, r.sources || {}); sources[k] = 'Edited';
+  const old = r[k];
+  if (await patchRecord({ [k]: value, sources })) {
+    const label = (FIELDS.find(f => f[0] === k) || [k, k])[1];
+    await logEvent(r.id, 'edit', label + (old ? ' changed' : ' filled in') + (k === 'issue' ? '' : ': ' + (value || '(cleared)')));
+    await loadEvents(r.id); renderRecord(true);
+  }
+}
+async function setReceived(d) {
+  d = d || (document.getElementById('rec-date') || {}).value;
+  if (!d) return toast('Pick the date it was received.', true);
+  const r = records.find(x => x.id === openRecordId); if (!r) return;
+  const iso = dateToIso(d);
+  const st = Object.assign({}, r.step_times || {}); st.Received = iso;
+  const sources = Object.assign({}, r.sources || {}); sources.received_at = 'Edited';
+  if (await patchRecord({ received_at: iso, step_times: st, sources })) {
+    await logEvent(r.id, 'step', 'Received ' + fmtDate(iso) + ' · 14-day clock started');
+    await loadEvents(r.id); renderRecord(true);
+  }
+}
+async function moveStep(dir, to) {
+  const r = records.find(x => x.id === openRecordId); if (!r) return;
+  const si = Math.max(0, STEPS.indexOf(r.step));
+  const target = to || STEPS[si + dir];
+  if (!target) return;
+  if (dir > 0 && !r.received_at) return toast('Mark it received first.', true);
+  const st = Object.assign({}, r.step_times || {});
+  if (dir > 0 || to) st[target] = new Date().toISOString();
+  if (await patchRecord({ step: target, step_times: st })) {
+    await logEvent(r.id, 'step', (dir < 0 ? 'Moved back to ' : 'Moved to ') + target);
+    await loadEvents(r.id); renderRecord(true);
+    toast('Now at ' + target);
+  }
+}
+function skipQuote() { moveStep(1, 'Repair'); }
+function openHold() {
+  document.getElementById('modal-body').innerHTML = `<h2>Put on hold</h2>
+    <p class="note">The 14-day clock keeps running. The reason is recorded so management can see what held it up.</p>
+    <label class="l">Reason<select id="h-reason" onchange="document.getElementById('h-other-wrap').style.display=this.value==='Other'?'':'none'">${HOLD_REASONS.map(x => `<option>${x}</option>`).join('')}</select></label>
+    <label class="l" id="h-other-wrap" style="display:none;">Describe<input id="h-other"></label>
+    <div class="bar"><button class="btn primary" onclick="saveHold()">Put on hold</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
+  document.getElementById('modal').classList.add('open');
+}
+async function saveHold() {
+  let reason = document.getElementById('h-reason').value;
+  if (reason === 'Other') { const o = document.getElementById('h-other').value.trim(); if (!o) return toast('Describe the reason.', true); reason = 'Other: ' + o; }
+  closeModal();
+  const r = records.find(x => x.id === openRecordId); if (!r) return;
+  if (await patchRecord({ hold_reason: reason, hold_since: new Date().toISOString() })) {
+    await logEvent(r.id, 'hold', 'On hold: ' + reason);
+    await loadEvents(r.id); renderRecord(true);
+  }
+}
+async function resumeHold() {
+  const r = records.find(x => x.id === openRecordId); if (!r) return;
+  const mins = r.hold_since ? Math.round((Date.now() - new Date(r.hold_since).getTime()) / 60000) : null;
+  const reason = r.hold_reason;
+  if (await patchRecord({ hold_reason: null, hold_since: null })) {
+    const dur = mins == null ? '' : mins >= 1440 ? ' after ' + (Math.round(mins / 144) / 10) + ' days' : mins >= 60 ? ' after ' + Math.round(mins / 60) + ' hours' : ' after ' + mins + ' minutes';
+    await logEvent(r.id, 'resume', 'Resumed (was: ' + reason + ')' + dur, mins);
+    await loadEvents(r.id); renderRecord(true);
+  }
+}
+
+// ── LIVE UPDATES ────────────────────────────────────────
+let liveT = null;
+function typing() { const a = document.activeElement; return a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && a.id !== 'q'; }
+function subscribeLive() {
+  sb.channel('rr-live')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_records' }, onLive)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_events' }, onLive)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'repair_tickets' }, onLive)
+    .subscribe();
+}
+function onLive() { clearTimeout(liveT); liveT = setTimeout(liveApply, 800); }
+async function liveApply() {
+  if (typing() || document.getElementById('modal').classList.contains('open')) { liveT = setTimeout(liveApply, 1500); return; }
+  try { await loadAll(); if (openRecordId) await loadEvents(openRecordId); } catch (e) { return; }
+  if (view === 'record') renderRecord(true); else renderRows();
+}
+
+// ── AUTH ────────────────────────────────────────────────
+let launched = false;
+async function launch() {
+  if (launched) return; launched = true;
+  try { await loadAll(); } catch (e) { document.getElementById('view').innerHTML = '<div class="empty">Could not load: ' + esc(e.message) + '. Has 12-repair-record.sql been run?</div>'; return; }
+  renderList(); subscribeLive();
+}
+function onSession(s) {
+  if (s) { document.getElementById('auth').classList.add('hidden'); me = (s.user.email || '').toLowerCase(); document.getElementById('user-email').textContent = me; setTimeout(launch, 0); }
+  else document.getElementById('auth').classList.remove('hidden');
+}
+sb.auth.onAuthStateChange((_e, s) => onSession(s));
+sb.auth.getSession().then(({ data }) => onSession(data.session));
+async function signIn() {
+  const email = document.getElementById('auth-email').value.trim(), password = document.getElementById('auth-password').value;
+  const err = document.getElementById('auth-err'); err.textContent = '';
+  if (!email || !password) { err.textContent = 'Enter your email and password.'; return; }
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) err.textContent = 'Login failed. Check your email and password.';
+}
+document.getElementById('auth-password').addEventListener('keydown', e => { if (e.key === 'Enter') signIn(); });
+async function signOut() { await sb.auth.signOut(); location.reload(); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+</script>
+</body>
+</html>
