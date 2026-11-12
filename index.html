@@ -125,7 +125,20 @@ input.need{border-color:var(--warn);background:var(--warn-soft)}
 .phx{position:absolute;top:4px;right:4px;width:28px;height:28px;border-radius:50%;border:0;background:rgba(0,0,0,.65);color:#fff;font-size:16px;line-height:1}
 .drop{border:1px dashed var(--line2);border-radius:6px;padding:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--muted);font-size:13px}
 .drop.over{border-color:var(--teal);background:var(--teal-dk)}
-@media(max-width:760px){.grid3{grid-template-columns:1fr}.alab{width:100%}}
+.grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.strrow{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.shotpic{flex:0 0 240px;display:flex;flex-direction:column;gap:8px}
+.shotpic img{width:100%;max-height:220px;object-fit:contain;border-radius:6px;background:var(--line)}
+.shots{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:6px}
+.shot{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--muted);text-align:center}
+.shot input{text-align:center;padding:6px 2px;font-size:14px;font-weight:600}
+.shot.unsure input{border:2px solid var(--warn);background:var(--warn-soft)}
+.statrow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.stat{background:var(--raised);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column}
+.stat b{font-size:26px;line-height:1.1}
+.stdt input{min-width:90px;padding:6px 8px}
+.stdt td{padding:6px 4px}
+@media(max-width:760px){.grid3{grid-template-columns:1fr}.alab{width:100%}.grid4{grid-template-columns:1fr 1fr}.shots{grid-template-columns:repeat(5,minmax(0,1fr))}.statrow{grid-template-columns:1fr 1fr}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
 </head>
@@ -215,7 +228,7 @@ function renderList() {
   const v = document.getElementById('view');
   v.innerHTML = `<div class="bar" style="justify-content:space-between;align-items:flex-end;">
       <div><h1>Repairs</h1><p class="lede">Test version. It reads the Repair Queue but never changes it.</p></div>
-      <button class="btn primary" onclick="openNewTest()">New test repair</button></div>
+      <div class="bar"><button class="btn" onclick="openStandards()">Test standards</button><button class="btn primary" onclick="openNewTest()">New test repair</button></div></div>
     <div class="tabs">
       <button class="tab ${listTab === 'queue' ? 'on' : ''}" onclick="listTab='queue';renderList()">Repair Queue repairs</button>
       <button class="tab ${listTab === 'test' ? 'on' : ''}" onclick="listTab='test';renderList()">Test repairs</button>
@@ -351,7 +364,7 @@ function setPrefillStatus(m) { prefillMsg = m; const el = document.getElementByI
 // ── RECORD ──────────────────────────────────────────────
 async function openRecord(id) {
   openRecordId = id; view = 'record'; prefillMsg = ''; recTab = 'Assessment'; openSecs = new Set();
-  await Promise.all([loadEvents(id), loadPhotos(id)]);
+  await Promise.all([loadEvents(id), loadPhotos(id), loadStandards()]);
   renderRecord();
   window.scrollTo(0, 0);
 }
@@ -385,7 +398,7 @@ function renderRecord(keepScroll) {
     <div class="layout">
       <div class="mainc">
         ${renderTabs(r)}
-        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${recTab === 'Assessment' ? renderAssessment(r) : '<div class="soon">Coming in a later install.</div>'}</div>
+        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${recTab === 'Assessment' ? renderAssessment(r) : recTab === 'Work performed' ? renderWork(r) : recTab === 'Testing' ? renderTesting(r) : '<div class="soon">Coming in a later install.</div>'}</div>
         <div class="card"><h2 style="margin-bottom:8px;">History</h2><ul class="hist">${events.length ? events.map(e => `<li>${esc(e.text)}<div class="when">${esc(e.by_email === 'system' ? 'Automatic' : nameOf(e.by_email))}, ${fmtDT(e.at)}</div></li>`).join('') : '<li class="muted">No history yet.</li>'}</ul></div>
       </div>
       <div class="side">
@@ -550,7 +563,7 @@ function secStatus(r, s) {
 }
 
 function renderTabs(r) {
-  const avail = { 'Assessment': true };
+  const avail = { 'Assessment': true, 'Work performed': true, 'Testing': true };
   return `<div class="tabs" style="margin-bottom:0;">${['Assessment', 'Work performed', 'Testing', 'QC', 'Report'].map(t =>
     `<button class="tab ${recTab === t ? 'on' : ''}" ${avail[t] ? `onclick="recTab='${t}';renderRecord(true)"` : 'disabled title="Coming in a later install"'}>${t}</button>`).join('')}</div>`;
 }
@@ -623,7 +636,7 @@ function toggleSec(id) { openSecs.has(id) ? openSecs.delete(id) : openSecs.add(i
 function setOpt(id, key, val) { const r = curRec(); const d = secData(r, id); d.v[key] = d.v[key] === val ? null : val; scheduleSave(); rerenderSec(id); refreshProgress(); }
 function toggleMulti(id, key, val) { const r = curRec(); const d = secData(r, id); const a = Array.isArray(d.v[key]) ? d.v[key] : []; d.v[key] = a.includes(val) ? a.filter(x => x !== val) : a.concat(val); scheduleSave(); rerenderSec(id); refreshProgress(); }
 function setVal(id, key, val) { const r = curRec(); secData(r, id).v[key] = val; scheduleSave(); }
-function setNotes(id, which, val) { const r = curRec(); secData(r, id)[which] = val; scheduleSave(); }
+function setNotes(id, which, val) { notesObj(id)[which] = val; scheduleSave(); const b = document.getElementById('w-done'); if (b && id === 'W') b.disabled = !String(workOf(curRec()).text || workOf(curRec()).raw || '').trim(); }
 function addPart() { const r = curRec(); const d = secData(r, 'H'); d.v.parts = (Array.isArray(d.v.parts) ? d.v.parts : []).concat({ qty: 1, desc: '', pn: '' }); scheduleSave(); rerenderSec('H'); }
 function setPart(i, k, v) { const r = curRec(); const d = secData(r, 'H'); if (d.v.parts && d.v.parts[i]) { d.v.parts[i][k] = v; scheduleSave(); } }
 function removePart(i) { const r = curRec(); const d = secData(r, 'H'); (d.v.parts || []).splice(i, 1); scheduleSave(); rerenderSec('H'); }
@@ -640,10 +653,10 @@ function scheduleSave() {
 async function saveAssessment() {
   saveTimer = null; const r = curRec(); if (!r) return;
   saving = true;
-  const { error } = await sb.from('rr_records').update({ assessment: r.assessment }).eq('id', r.id);
+  const { error } = await sb.from('rr_records').update({ assessment: r.assessment || {}, work: r.work || {}, tests: r.tests || {} }).eq('id', r.id);
   saving = false;
   const st = document.getElementById('as-status');
-  if (error) { if (st) st.textContent = 'Not saved'; toast('Could not save the assessment: ' + error.message, true); }
+  if (error) { if (st) st.textContent = 'Not saved'; toast('Could not save: ' + error.message, true); }
   else if (st) st.textContent = 'Saved';
 }
 async function finishAssessment(next) {
@@ -658,7 +671,7 @@ async function finishAssessment(next) {
   }
 }
 async function rewrite(id) {
-  const r = curRec(); const d = secData(r, id);
+  const r = curRec(); const d = notesObj(id);
   const notes = String(d.raw || '').trim();
   const msg = document.getElementById('rwmsg-' + id), btn = document.getElementById('rw-' + id);
   if (!notes) { msg.textContent = 'Type your notes first.'; return; }
@@ -667,7 +680,7 @@ async function rewrite(id) {
   try {
     const { data: s } = await sb.auth.getSession();
     const res = await fetch(SERVER + '/rewrite-for-customer', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (s && s.session ? s.session.access_token : '') },
-      body: JSON.stringify({ text: notes, section: id + ' ' + (SECTIONS.find(x => x.id === id) || {}).title }) });
+      body: JSON.stringify({ text: notes, section: id === 'W' ? 'Work performed' : id + ' ' + (SECTIONS.find(x => x.id === id) || {}).title }) });
     const out = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(out.error || 'failed (' + res.status + ')');
     d.text = out.text; const ta = document.getElementById('txt-' + id); if (ta) ta.value = out.text;
@@ -689,7 +702,8 @@ function photosHtml(sec) {
   return list.map(p => `<div class="ph"><a href="${esc(photoUrls[p.path] || '#')}" target="_blank" rel="noopener"><img src="${esc(photoUrls[p.path] || '')}" alt="Photo for section ${esc(sec)}"></a>
     <button class="phx" onclick="deletePhoto('${p.id}')" aria-label="Delete photo">×</button></div>`).join('');
 }
-function refreshPhotoAreas() { SECTIONS.forEach(s => { const el = document.getElementById('ph-' + s.id); if (el) el.innerHTML = photosHtml(s.id); }); const pl = document.getElementById('phone-list'); if (pl) pl.innerHTML = photosHtml(phoneSec()); }
+function refreshPhotoAreas() { SECTIONS.map(s => s.id).concat(EXTRA_PHOTO_SECS.map(x => x[0])).forEach(id => { const el = document.getElementById('ph-' + id); if (el) el.innerHTML = photosHtml(id); });
+  if (view === 'record' && recTab === 'Testing' && !typing()) renderRecord(true); const pl = document.getElementById('phone-list'); if (pl) pl.innerHTML = photosHtml(phoneSec()); }
 function resizeImage(file) {
   return new Promise(resolve => {
     const img = new Image();
@@ -731,7 +745,7 @@ function phoneLink(sec) { return location.origin + location.pathname + '#phone='
 function phoneQr(sec) {
   const url = phoneLink(sec);
   document.getElementById('modal-body').innerHTML = `<h2>Add photos from a phone</h2>
-    <p class="note">Scan this with the phone’s camera. It opens this repair on the phone, ready to take photos for section ${esc(sec)}. Photos appear here within a few seconds.</p>
+    <p class="note">Scan this with the phone’s camera. It opens this repair on the phone, ready to add photos for ${esc((EXTRA_PHOTO_SECS.find(x => x[0] === sec) || [, 'section ' + sec])[1])}. They appear here within a few seconds.</p>
     <div id="qr" style="background:#fff;padding:14px;border-radius:8px;align-self:center;"></div>
     <p class="note" style="word-break:break-all;">${esc(url)}</p>
     <div class="bar"><button class="btn" onclick="closeModal()">Done</button></div>`;
@@ -741,7 +755,7 @@ function phoneQr(sec) {
 }
 
 // ── PHONE MODE (opened from the QR code) ──
-function phoneParams() { const m = location.hash.match(/^#phone=([\w-]+)(?:&s=([A-H]))?/); return m ? { id: m[1], sec: m[2] || 'A' } : null; }
+function phoneParams() { const m = location.hash.match(/^#phone=([\w-]+)(?:&s=([A-Za-z]+))?/); return m ? { id: m[1], sec: m[2] || 'A' } : null; }
 let phoneSecSel = null;
 function phoneSec() { return phoneSecSel || (phoneParams() || {}).sec || 'A'; }
 async function renderPhone() {
@@ -753,11 +767,243 @@ async function renderPhone() {
   await loadPhotos(r.id);
   v.innerHTML = `<div style="max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:14px;">
     <div><div class="note">Repair Record · photos</div><h1 style="font-size:26px;">${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) + ' · ' : ''}${esc(r.customer_name || '')}</h1><div class="muted">${esc(r.model || '')}</div></div>
-    <label class="l">Section<select id="ph-sec" onchange="phoneSecSel=this.value;document.getElementById('phone-list').innerHTML=photosHtml(this.value)">${SECTIONS.filter(s => !s.internal).map(s => `<option value="${s.id}" ${s.id === phoneSec() ? 'selected' : ''}>${s.id} · ${esc(s.title)}</option>`).join('')}</select></label>
+    <label class="l">Section<select id="ph-sec" onchange="phoneSecSel=this.value;document.getElementById('phone-list').innerHTML=photosHtml(this.value)">${SECTIONS.filter(s => !s.internal).map(s => `<option value="${s.id}" ${s.id === phoneSec() ? 'selected' : ''}>${s.id} · ${esc(s.title)}</option>`).join('')}${EXTRA_PHOTO_SECS.map(([id, t]) => `<option value="${id}" ${id === phoneSec() ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
     <label class="btn primary" style="justify-content:center;min-height:56px;font-size:17px;">Take or choose photos<input type="file" accept="image/*" multiple hidden onchange="addFiles(phoneSec(),this.files,'${r.id}');this.value=''"></label>
     <div class="phs" id="phone-list">${photosHtml(phoneSec())}</div>
     <p class="note">Photos go straight onto the repair card on the computer. You can close this page when you’re done.</p></div>`;
 }
+
+// ── WORK PERFORMED ──────────────────────────────────────
+const EXTRA_PHOTO_SECS = [['W', 'Work performed'], ['Chrono', 'Chrono screenshots'], ['Target', 'Accuracy target']];
+function workOf(r) { if (!r.work || typeof r.work !== 'object') r.work = {}; if (!Array.isArray(r.work.parts)) r.work.parts = []; return r.work; }
+function notesObj(id) { const r = curRec(); return id === 'W' ? workOf(r) : secData(r, id); }
+function notesBlock(id, label) {
+  const d = notesObj(id);
+  return `<div class="find">
+    <label class="l">${label || 'Your notes'}<textarea id="raw-${id}" placeholder="Quick notes are fine" oninput="setNotes('${id}','raw',this.value)">${esc(d.raw || '')}</textarea></label>
+    <div class="bar"><button class="btn sm teal" id="rw-${id}" onclick="rewrite('${id}')">Rewrite for customer</button><span class="note" id="rwmsg-${id}"></span></div>
+    <label class="l"><span>Customer will see <span style="color:var(--warn);">(goes on the Service Report)</span></span><textarea id="txt-${id}" placeholder="Click “Rewrite for customer”, or write it here" oninput="setNotes('${id}','text',this.value)">${esc(d.text || '')}</textarea></label></div>`;
+}
+function photoBlock(sec, label) {
+  return `<div class="phwrap"><div class="l">${label || 'Photos'}</div><div class="phs" id="ph-${sec}">${photosHtml(sec)}</div>
+    <div class="drop" ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')" ondrop="dropFiles(event,'${sec}')">
+      Drag photos here, or <label class="btn sm">Choose files<input type="file" accept="image/*" multiple hidden onchange="addFiles('${sec}',this.files);this.value=''"></label>
+      <button class="btn sm" onclick="phoneQr('${sec}')">Add from phone</button></div></div>`;
+}
+function renderWork(r) {
+  const w = workOf(r);
+  const est = ((asOf(r).H || {}).v || {}).parts || [];
+  return `<div class="bar" style="justify-content:space-between;"><span>${r.repaired_at ? `Repair marked done by <b>${esc(nameOf(r.repaired_by))}</b> on ${fmtDate(r.repaired_at)}` : 'Describe what was done. It goes on the Service Report.'}</span><span class="note" id="as-status">Saves automatically</span></div>
+    <div class="card" style="display:flex;flex-direction:column;gap:8px;"><h2>What was done</h2>${notesBlock('W', 'Your notes (what you did)')}</div>
+    <div class="card" style="display:flex;flex-direction:column;gap:8px;"><div class="bar" style="justify-content:space-between;"><h2>Parts used</h2>${est.length ? `<button class="btn sm" onclick="copyEstimateParts()">Copy from the estimate (H)</button>` : ''}</div>
+      <div id="w-parts">${w.parts.map((p, i) => workPartRow(p, i)).join('') || '<span class="note">No parts yet.</span>'}</div>
+      <div><button class="btn sm" onclick="addWorkPart()">Add part</button></div></div>
+    <div class="card">${photoBlock('W', 'Photos of the work (optional)')}</div>
+    <div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Finish the repair</b>
+      <span class="note">${String(w.text || w.raw || '').trim() ? 'Ready.' : 'Add a description of the work first.'}</span>
+      <div class="bar"><button class="btn primary" ${String(w.text || w.raw || '').trim() ? '' : 'disabled'} id="w-done" onclick="finishWork()">Repair done → Testing</button></div></div>`;
+}
+function workPartRow(p, i) {
+  return `<div class="prow"><input type="number" min="1" value="${esc(p.qty || 1)}" oninput="setWorkPart(${i},'qty',this.value)" aria-label="Quantity" style="max-width:80px;">
+    <input value="${esc(p.desc || '')}" placeholder="Part" oninput="setWorkPart(${i},'desc',this.value)" aria-label="Part">
+    <input value="${esc(p.pn || '')}" placeholder="Part #" oninput="setWorkPart(${i},'pn',this.value)" aria-label="Part number" style="max-width:180px;">
+    <button class="btn sm ghost" onclick="removeWorkPart(${i})">Remove</button></div>`;
+}
+function redrawWorkParts() { const el = document.getElementById('w-parts'); const w = workOf(curRec()); if (el) el.innerHTML = w.parts.map((p, i) => workPartRow(p, i)).join('') || '<span class="note">No parts yet.</span>'; }
+function addWorkPart() { workOf(curRec()).parts.push({ qty: 1, desc: '', pn: '' }); scheduleSave(); redrawWorkParts(); }
+function setWorkPart(i, k, v) { const w = workOf(curRec()); if (w.parts[i]) { w.parts[i][k] = v; scheduleSave(); } }
+function removeWorkPart(i) { workOf(curRec()).parts.splice(i, 1); scheduleSave(); redrawWorkParts(); }
+function copyEstimateParts() {
+  const r = curRec(), w = workOf(r), est = ((asOf(r).H || {}).v || {}).parts || [];
+  if (w.parts.length && !confirm('Add the estimate’s parts to the list?')) return;
+  est.forEach(p => w.parts.push({ qty: p.qty || 1, desc: p.desc || '', pn: p.pn || '' }));
+  scheduleSave(); redrawWorkParts();
+}
+async function finishWork() {
+  const r = curRec(); if (!r) return;
+  if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
+  const patch = { repaired_by: me, repaired_at: new Date().toISOString() };
+  if (Math.max(0, STEPS.indexOf(r.step)) < STEPS.indexOf('Testing')) { const st = Object.assign({}, r.step_times || {}); st.Repair = st.Repair || patch.repaired_at; st.Testing = patch.repaired_at; patch.step = 'Testing'; patch.step_times = st; }
+  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Repair done' + (patch.step ? ', moved to Testing' : '')); await loadEvents(r.id); recTab = 'Testing'; renderRecord(true); toast('Repair marked done'); }
+}
+
+// ── TESTING ─────────────────────────────────────────────
+let standards = [];
+async function loadStandards() { const { data } = await sb.from('rr_standards').select('*').order('model', { ascending: true }); standards = data || []; }
+function testsOf(r) { if (!r.tests || typeof r.tests !== 'object') r.tests = {}; if (!Array.isArray(r.tests.strings)) r.tests.strings = []; if (!r.tests.accuracy) r.tests.accuracy = {}; return r.tests; }
+function norm(s) { return String(s || '').toLowerCase().replace(/^fx\s+/, '').replace(/\s+/g, ' ').trim(); }
+// ".30", "30", "0.30" → ".30";  "6.35mm" → "6.35"
+function normCal(s) { const m = String(s || '').match(/\d*\.\d+|\d+/); if (!m) return ''; let c = m[0]; if (!c.includes('.')) c = '.' + c; c = c.replace(/^0+\./, '.'); return c; }
+function standardFor(r, pellet) {
+  const model = norm(r.model), cal = normCal(r.caliber);
+  const fits = standards.filter(s => { const m = norm(s.model); return m && model && (model.includes(m) || m.includes(model)) && (!s.caliber || !cal || normCal(s.caliber) === cal); });
+  if (!fits.length) return null;
+  const p = norm(pellet);
+  return fits.find(s => s.pellet && p && (p.includes(norm(s.pellet)) || norm(s.pellet).includes(p))) || fits.find(s => !s.pellet) || fits[0];
+}
+function stats(shots, grains) {
+  const v = shots.map(Number).filter(x => isFinite(x) && x > 0);
+  if (!v.length) return null;
+  const avg = v.reduce((a, b) => a + b, 0) / v.length, es = Math.max(...v) - Math.min(...v);
+  const sd = v.length > 1 ? Math.sqrt(v.reduce((a, x) => a + (x - avg) * (x - avg), 0) / (v.length - 1)) : 0;
+  const g = Number(grains);
+  return { n: v.length, avg, es, sd, fpe: g > 0 ? avg * avg * g / 450240 : null };
+}
+function verdict(st, std) {
+  if (!st) return null;
+  if (!std) return { pass: null, label: 'No standard yet', checks: [] };
+  const checks = [];
+  if (std.fps_min != null || std.fps_max != null) checks.push({ k: 'Average', ok: (std.fps_min == null || st.avg >= Number(std.fps_min)) && (std.fps_max == null || st.avg <= Number(std.fps_max)) });
+  if (std.es_max != null) checks.push({ k: 'ES', ok: st.es <= Number(std.es_max) });
+  if (std.sd_max != null) checks.push({ k: 'SD', ok: st.sd <= Number(std.sd_max) });
+  const pass = checks.every(c => c.ok);
+  return { pass, label: pass ? 'Pass' : 'Fail: ' + checks.filter(c => !c.ok).map(c => c.k).join(', '), checks };
+}
+function stdText(std) {
+  if (!std) return 'No FX standard for this model and caliber yet. Results are recorded without pass/fail. Add one under Test standards.';
+  const parts = [];
+  if (std.fps_min != null || std.fps_max != null) parts.push((std.fps_min ?? '?') + '–' + (std.fps_max ?? '?') + ' fps');
+  if (std.es_max != null) parts.push('ES ≤ ' + std.es_max);
+  if (std.sd_max != null) parts.push('SD ≤ ' + std.sd_max);
+  return 'FX standard for ' + esc(std.model) + ' ' + esc(std.caliber) + (std.pellet ? ' with ' + esc(std.pellet) : '') + ': ' + parts.join(' · ');
+}
+function renderTesting(r) {
+  const t = testsOf(r);
+  let h = `<div class="bar" style="justify-content:space-between;"><span>${r.tested_at ? `Testing marked done by <b>${esc(nameOf(r.tested_by))}</b> on ${fmtDate(r.tested_at)}` : 'Drop the chrono screenshot on a string. The shots are read for you.'}</span><span class="note" id="as-status">Saves automatically</span></div>`;
+  if (!t.strings.length) t.strings.push(newString());
+  h += t.strings.map((s, i) => `<div class="card" id="str-${i}">${stringInner(r, s, i)}</div>`).join('');
+  h += `<div><button class="btn" onclick="addString()">Add another string</button></div>`;
+  const unassigned = photos.filter(p => p.section === 'Chrono' && !t.strings.some(s => s.photo === p.path));
+  if (unassigned.length) h += `<div class="card"><h2>Screenshots from a phone</h2><p class="note">Pick which string each one belongs to. It is read automatically.</p><div class="phs">${unassigned.map(p => `<div style="display:flex;flex-direction:column;gap:6px;"><div class="ph"><img src="${esc(photoUrls[p.path] || '')}" alt="Chrono screenshot"></div>${t.strings.map((s, i) => `<button class="btn sm" onclick="useScreenshot('${p.id}',${i})">Use for string ${i + 1}</button>`).join('')}</div>`).join('')}</div></div>`;
+  h += `<div class="card" id="acc">${accuracyInner(r)}</div>`;
+  const ready = t.strings.some(s => stats(s.shots || []));
+  h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Finish testing</b><span class="note">${ready ? 'Ready.' : 'Record at least one velocity string first.'}</span>
+    <div class="bar"><button class="btn primary" id="t-done" ${ready ? '' : 'disabled'} onclick="finishTesting()">Testing done → QC</button></div></div>`;
+  return h;
+}
+function newString() { return { id: Math.random().toString(36).slice(2, 8), pellet: '', grains: '', reg_bar: '', power: '', shots: [], unsure: [], photo: null }; }
+function stringInner(r, s, i) {
+  const std = standardFor(r, s.pellet), st = stats(s.shots || [], s.grains || (std && std.grains)), v = verdict(st, std);
+  const n = Math.max(10, (s.shots || []).length);
+  const shotIn = Array.from({ length: n }, (_, k) => `<label class="shot ${(s.unsure || []).includes(k) ? 'unsure' : ''}">Shot ${k + 1}<input inputmode="decimal" value="${esc((s.shots || [])[k] ?? '')}" oninput="setShot(${i},${k},this.value)" aria-label="String ${i + 1} shot ${k + 1}"></label>`).join('');
+  return `<div class="bar" style="justify-content:space-between;"><h2>Velocity test · String ${i + 1}</h2>${r.tests.strings.length > 1 ? `<button class="btn sm ghost" onclick="removeString(${i})">Remove string</button>` : ''}</div>
+    <p class="note" style="margin:4px 0 10px;">${stdText(std)}</p>
+    <div class="strrow">
+      <div class="shotpic">${s.photo ? `<a href="${esc(photoUrls[s.photo] || '#')}" target="_blank" rel="noopener"><img src="${esc(photoUrls[s.photo] || '')}" alt="Chronograph screenshot for string ${i + 1}"></a>` : ''}
+        <div class="drop" ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')" ondrop="event.preventDefault();this.classList.remove('over');chronoFile(${i},event.dataTransfer.files[0])">
+          ${s.photo ? 'Replace:' : 'Drop the chrono screenshot here, or'} <label class="btn sm">Choose<input type="file" accept="image/*" hidden onchange="chronoFile(${i},this.files[0]);this.value=''"></label>
+          <button class="btn sm" onclick="phoneQr('Chrono')">From phone</button></div>
+        <span class="note" id="rd-${i}">${esc(s.readNote || '')}</span></div>
+      <div style="flex:999 1 420px;min-width:0;display:flex;flex-direction:column;gap:10px;">
+        <div class="grid4">
+          <label class="l">Pellet<input value="${esc(s.pellet || '')}" oninput="setStr(${i},'pellet',this.value,true)" placeholder="${esc(std && std.pellet || 'e.g. JSB Exact 44.75')}"></label>
+          <label class="l">Weight (gr)<input inputmode="decimal" value="${esc(s.grains || '')}" oninput="setStr(${i},'grains',this.value,true)" placeholder="${esc(std && std.grains || '')}"></label>
+          <label class="l">Regulator (bar)<input inputmode="decimal" value="${esc(s.reg_bar || '')}" oninput="setStr(${i},'reg_bar',this.value)"></label>
+          <label class="l">Power setting<input value="${esc(s.power || '')}" oninput="setStr(${i},'power',this.value)"></label></div>
+        <div class="shots">${shotIn}</div>
+        ${(s.unsure || []).length ? '<span class="note" style="color:var(--warn);">Highlighted shots were hard to read on the screenshot. Please check them.</span>' : ''}
+        <div><button class="btn sm ghost" onclick="addShot(${i})">Add a shot</button></div>
+        <div class="statrow" id="stats-${i}">${statsHtml(st, v)}</div></div></div>`;
+}
+function statsHtml(st, v) {
+  if (!st) return '<span class="note">Enter or read the shots to see the results.</span>';
+  const cell = (k, val, sub, col) => `<div class="stat"><span class="note">${k}</span><b class="num" style="color:${col || 'var(--text)'}">${val}</b><span class="note">${sub}</span></div>`;
+  const good = 'var(--teal-soft)', bad = 'var(--red)';
+  const ck = k => !v || v.pass == null ? undefined : (v.checks.find(c => c.k === k) || { ok: true }).ok ? good : bad;
+  return cell('Average', st.avg.toFixed(1), 'fps · ' + st.n + ' shots', ck('Average')) + cell('Extreme spread', st.es.toFixed(1).replace(/\.0$/, ''), 'fps', ck('ES')) +
+    cell('Std deviation', st.sd.toFixed(1), 'fps', ck('SD')) + cell('Energy', st.fpe == null ? '—' : st.fpe.toFixed(1), st.fpe == null ? 'add pellet weight' : 'ft·lb') +
+    cell('Result', v.pass == null ? '—' : v.pass ? 'Pass' : 'Fail', v.pass == null ? v.label : v.pass ? 'vs FX standard' : v.label.replace('Fail: ', 'out of range: '), v.pass == null ? undefined : v.pass ? good : bad);
+}
+function redrawStats(i) { const r = curRec(), s = testsOf(r).strings[i], el = document.getElementById('stats-' + i); if (!el || !s) return; const std = standardFor(r, s.pellet); const st = stats(s.shots || [], s.grains || (std && std.grains)); el.innerHTML = statsHtml(st, verdict(st, std)); const b = document.getElementById('t-done'); if (b) b.disabled = !testsOf(r).strings.some(x => stats(x.shots || [])); }
+function redrawString(i) { const r = curRec(), el = document.getElementById('str-' + i); if (el) el.innerHTML = stringInner(r, testsOf(r).strings[i], i); redrawStats(i); }
+function setShot(i, k, val) { const s = testsOf(curRec()).strings[i]; s.shots = s.shots || []; s.shots[k] = String(val).trim() === '' ? null : String(val).trim(); while (s.shots.length && (s.shots[s.shots.length - 1] == null)) s.shots.pop(); s.unsure = (s.unsure || []).filter(x => x !== k); scheduleSave(); redrawStats(i); }
+function setStr(i, key, val, stdAffects) { const s = testsOf(curRec()).strings[i]; s[key] = val; scheduleSave(); if (stdAffects) redrawStats(i); }
+function addShot(i) { const s = testsOf(curRec()).strings[i]; const n = Math.max(10, (s.shots || []).length); s.shots = (s.shots || []).concat(Array(n + 1 - (s.shots || []).length).fill(null)); redrawString(i); }
+function addString() { testsOf(curRec()).strings.push(newString()); scheduleSave(); renderRecord(true); }
+function removeString(i) { if (!confirm('Remove string ' + (i + 1) + '?')) return; testsOf(curRec()).strings.splice(i, 1); scheduleSave(); renderRecord(true); }
+function blobToBase64(blob) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = rej; fr.readAsDataURL(blob); }); }
+async function chronoFile(i, file) {
+  if (!file) return;
+  const r = curRec(), s = testsOf(r).strings[i];
+  const msg = document.getElementById('rd-' + i); if (msg) msg.textContent = 'Uploading and reading the shots…';
+  try {
+    const blob = await resizeImage(file);
+    const path = `${r.id}/Chrono/${Date.now()}-${Math.random().toString(36).slice(2, 7)}.jpg`;
+    const up = await sb.storage.from('rr-photos').upload(path, blob, { contentType: 'image/jpeg' }); if (up.error) throw up.error;
+    const ins = await sb.from('rr_photos').insert({ record_id: r.id, section: 'Chrono', path, caption: 'String ' + (i + 1), uploaded_by: me }); if (ins.error) throw ins.error;
+    s.photo = path; await loadPhotos(r.id);
+    await readInto(i, await blobToBase64(blob));
+  } catch (e) { s.readNote = 'Could not read it (' + (e.message || e) + '). Type the shots in.'; scheduleSave(); redrawString(i); }
+}
+async function useScreenshot(photoId, i) {
+  const r = curRec(), p = photos.find(x => x.id === photoId), s = testsOf(r).strings[i]; if (!p || !s) return;
+  s.photo = p.path; scheduleSave(); renderRecord(true);
+  const msg = document.getElementById('rd-' + i); if (msg) msg.textContent = 'Reading the shots…';
+  try { const blob = await (await fetch(photoUrls[p.path])).blob(); await readInto(i, await blobToBase64(blob)); }
+  catch (e) { s.readNote = 'Could not read it (' + (e.message || e) + '). Type the shots in.'; scheduleSave(); redrawString(i); }
+}
+async function readInto(i, dataUrl) {
+  const r = curRec(), s = testsOf(r).strings[i];
+  const { data: ss } = await sb.auth.getSession();
+  const res = await fetch(SERVER + '/read-chrono', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (ss && ss.session ? ss.session.access_token : '') },
+    body: JSON.stringify({ image_base64: dataUrl, media_type: 'image/jpeg' }) });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || 'failed (' + res.status + ')');
+  if (!out.shots || !out.shots.length) { s.readNote = 'No shots found on that screenshot' + (out.note ? ' (' + out.note + ')' : '') + '. Type them in.'; }
+  else {
+    const had = (s.shots || []).some(x => x != null && x !== '');
+    if (!had || confirm('Replace the shots already typed in with the ones read from the screenshot?')) {
+      s.shots = out.shots.map(String); s.unsure = out.unsure || [];
+      s.readNote = 'Read ' + out.shots.length + ' shots' + (out.device ? ' from ' + out.device : '') + (out.converted ? ' (converted from m/s)' : '') + '. Please check them.';
+      await logEvent(r.id, 'test', 'String ' + (i + 1) + ': ' + out.shots.length + ' shots read from the chrono screenshot');
+    }
+  }
+  scheduleSave(); redrawString(i);
+}
+function accuracyInner(r) {
+  const a = testsOf(r).accuracy, std = standardFor(r, (testsOf(r).strings[0] || {}).pellet);
+  const g = Number(a.group_in), lim = std && std.acc_group_in != null ? Number(std.acc_group_in) : null;
+  const res = a.group_in && lim != null ? (g <= lim ? '<b style="color:var(--teal-soft)">Within FX standard</b>' : '<b style="color:var(--red)">Outside FX standard</b>') : a.group_in ? '<span class="note">No accuracy standard yet</span>' : '';
+  return `<h2>Accuracy test <span class="note" style="font-weight:400;">${std && std.acc_group_in != null ? 'FX standard: ' + esc(std.acc_group_in) + ' in at ' + esc(std.acc_distance_yd ?? '?') + ' yd' : '(optional)'}</span></h2>
+    <div class="grid4" style="margin-top:8px;">
+      <label class="l">Distance (yd)<input inputmode="decimal" value="${esc(a.distance_yd || '')}" oninput="setAcc('distance_yd',this.value)"></label>
+      <label class="l">Shots<input inputmode="numeric" value="${esc(a.shots || '')}" oninput="setAcc('shots',this.value)"></label>
+      <label class="l">Group size (in, center to center)<input inputmode="decimal" value="${esc(a.group_in || '')}" oninput="setAcc('group_in',this.value)"></label>
+      <div class="l">Result<div id="acc-res" style="padding-top:8px;">${res}</div></div></div>
+    ${photoBlock('Target', 'Target photo')}`;
+}
+function setAcc(k, v) { const r = curRec(); testsOf(r).accuracy[k] = v; scheduleSave(); if (k === 'group_in') { const el = document.getElementById('acc'); const y = window.scrollY; if (el) { const f = document.activeElement && document.activeElement.getAttribute('oninput'); el.innerHTML = accuracyInner(r); const again = f && el.querySelector(`[oninput="${f}"]`); if (again) { again.focus(); const L = again.value.length; try { again.setSelectionRange(L, L); } catch (e) {} } window.scrollTo(0, y); } } }
+async function finishTesting() {
+  const r = curRec(); if (!r) return;
+  if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
+  const patch = { tested_by: me, tested_at: new Date().toISOString() };
+  if (Math.max(0, STEPS.indexOf(r.step)) < STEPS.indexOf('QC')) { const st = Object.assign({}, r.step_times || {}); st.Testing = st.Testing || patch.tested_at; st.QC = patch.tested_at; patch.step = 'QC'; patch.step_times = st; }
+  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Testing done' + (patch.step ? ', moved to QC' : '')); await loadEvents(r.id); renderRecord(true); toast('Testing marked done'); }
+}
+
+// ── TEST STANDARDS PAGE ─────────────────────────────────
+const STD_COLS = [['model', 'Model', 'e.g. DRS MkII'], ['caliber', 'Caliber', '.30'], ['pellet', 'Pellet (blank = any)', ''], ['grains', 'Grains', ''], ['fps_min', 'Min fps', ''], ['fps_max', 'Max fps', ''],
+  ['es_max', 'Max ES', ''], ['sd_max', 'Max SD', ''], ['acc_distance_yd', 'Accuracy yd', ''], ['acc_group_in', 'Max group (in)', ''], ['notes', 'Notes', '']];
+const STD_NUM = ['grains', 'fps_min', 'fps_max', 'es_max', 'sd_max', 'acc_distance_yd', 'acc_group_in'];
+async function openStandards() { view = 'standards'; openRecordId = null; await loadStandards(); renderStandards(); }
+function renderStandards() {
+  const v = document.getElementById('view');
+  v.innerHTML = `<a href="#" onclick="backToList();return false;" style="color:var(--teal);font-size:13px;text-decoration:none;">← Repairs</a>
+    <h1>Test standards</h1><p class="lede">One row per model and caliber (and pellet if it matters). Pass/fail on the Testing tab uses these. Changes save as you type.</p>
+    <div style="overflow-x:auto;"><table class="stdt"><thead><tr>${STD_COLS.map(c => `<th>${c[1]}</th>`).join('')}<th></th></tr></thead><tbody>
+    ${standards.map(s => `<tr>${STD_COLS.map(([k, , ph]) => `<td><input value="${esc(s[k] ?? '')}" placeholder="${esc(ph)}" ${STD_NUM.includes(k) ? 'inputmode="decimal"' : ''} onchange="saveStd('${s.id}','${k}',this.value)" aria-label="${k}"></td>`).join('')}<td><button class="btn sm ghost" onclick="deleteStd('${s.id}')">Delete</button></td></tr>`).join('')
+      || `<tr><td colspan="${STD_COLS.length + 1}" class="muted" style="padding:20px;">No standards yet.</td></tr>`}
+    </tbody></table></div><div style="margin-top:12px;"><button class="btn primary" onclick="addStd()">Add a standard</button></div>`;
+}
+async function addStd() { const { error } = await sb.from('rr_standards').insert({ model: 'New model', caliber: '', updated_by: me }); if (error) return toast('Could not add: ' + error.message, true); await loadStandards(); renderStandards(); }
+async function saveStd(id, k, val) {
+  val = String(val).trim(); let v2 = val === '' ? null : val;
+  if (STD_NUM.includes(k) && v2 != null) { v2 = Number(v2); if (!isFinite(v2)) return toast('Please enter a number.', true); }
+  if ((k === 'model' || k === 'caliber') && v2 == null) v2 = '';
+  const { error } = await sb.from('rr_standards').update({ [k]: v2, updated_by: me, updated_at: new Date().toISOString() }).eq('id', id);
+  if (error) toast('Could not save: ' + error.message, true); else { const s = standards.find(x => x.id === id); if (s) s[k] = v2; toast('Saved'); }
+}
+async function deleteStd(id) { if (!confirm('Delete this standard?')) return; await sb.from('rr_standards').delete().eq('id', id); await loadStandards(); renderStandards(); }
 
 // ── LIVE UPDATES ────────────────────────────────────────
 let liveT = null;
@@ -767,6 +1013,7 @@ function subscribeLive() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_records' }, onLive)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_events' }, onLive)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'repair_tickets' }, onLive)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_standards' }, async () => { await loadStandards(); if (view === 'standards' && !typing()) renderStandards(); })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_photos' }, async p => {
       const rid = (p.new && p.new.record_id) || (p.old && p.old.record_id);
       if (openRecordId && (!rid || rid === openRecordId)) { await loadPhotos(openRecordId); refreshPhotoAreas(); }
@@ -775,7 +1022,7 @@ function subscribeLive() {
 }
 function onLive() { clearTimeout(liveT); liveT = setTimeout(liveApply, 800); }
 async function liveApply() {
-  if (view === 'phone') return;
+  if (view === 'phone' || view === 'standards') return;
   if (typing() || saveTimer || saving || document.getElementById('modal').classList.contains('open')) { liveT = setTimeout(liveApply, 1500); return; }
   try { await loadAll(); if (openRecordId) await loadEvents(openRecordId); } catch (e) { return; }
   if (view === 'record') renderRecord(true); else renderRows();
