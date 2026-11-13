@@ -229,6 +229,30 @@ let toastT = null;
 function toast(m, err) { const t = document.getElementById('toast'); t.textContent = m; t.className = 'show' + (err ? ' err' : ''); clearTimeout(toastT); toastT = setTimeout(() => t.className = '', err ? 6000 : 2600); }
 function nameOf(email) { const n = String(email || '').split('@')[0].split('.')[0]; return n ? n.charAt(0).toUpperCase() + n.slice(1) : ''; }
 function fullName(email) { const p = String(email || '').split('@')[0].split(/[._-]+/).filter(Boolean); return p.map(x => x.charAt(0).toUpperCase() + x.slice(1)).join(' '); }
+// Model names: just the name (no FX, caliber, barrel or Mk); generations only for Impacts.
+// Same rule as rr_clean_model() in 18-repair-record-models.sql.
+function cleanModel(t) {
+  let s = String(t || '').trim(); if (!s) return '';
+  if (/^fx\s*2000/i.test(s)) return 'FX2000';
+  s = s.replace(/^\s*fx\s+/i, '').replace(/\([^)]*\)/g, ' ')
+       .replace(/(^|\s)(\d?\.\d{2,3}|\d\.\d{1,2}\s?mm|\d{2,3}\s?cal)(?=\s|$)/gi, ' ')
+       .replace(/\d{3}\s?mm/gi, ' ').replace(/\s+/g, ' ').trim();
+  if (/^impact/i.test(s)) {
+    if (/\b(m4|mk\s?iv|mk\s?4)\b/i.test(s)) return 'Impact M4';
+    if (/\b(m3|mk\s?iii|mk\s?3)\b/i.test(s)) return 'Impact M3';
+    if (/\b(m2|mk\s?ii|mk\s?2)\b/i.test(s)) return 'Impact M2';
+    if (/\b(m1|mk\s?i|mk\s?1)\b/i.test(s)) return 'Impact M1';
+    if (/\bx\b/i.test(s)) return 'Impact X';
+    return 'Impact';
+  }
+  const fam = s.split(' ')[0];
+  const hit = options.find(o => o.kind === 'model' && o.value.toLowerCase() === fam.toLowerCase());
+  if (hit) return hit.value;
+  return s.replace(/\s+mk\s?[ivx0-9]+$/i, '').trim();
+}
+// Caliber / barrel length hidden inside a messy model name, e.g. "Impact M3 .30 600mm"
+function calFrom(t) { const m = String(t || '').match(/(?:^|[\s(])(\d?\.\d{2,3})(?=[\s)]|$)/); return m ? normCal(m[1]) : ''; }
+function barrelFrom(t) { const m = String(t || '').match(/(\d{3})\s?mm/i); return m ? m[1] + 'mm' : ''; }
 function dateToIso(d) { return d ? new Date(d + 'T12:00:00').toISOString() : null; }
 function isoToDate(iso) { if (!iso) return ''; const d = new Date(iso); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 // "DRS MkII (.30)" → { model: 'DRS MkII', cal: '.30' }
@@ -272,7 +296,7 @@ function renderList() {
   const v = document.getElementById('view');
   v.innerHTML = `<div class="bar" style="justify-content:space-between;align-items:flex-end;">
       <div><h1>Repairs</h1><p class="lede">Test version. It reads the Repair Queue but never changes it.</p></div>
-      <div class="bar">${STANDARDS_ON ? '<button class="btn" onclick="openStandards()">Test standards</button>' : ''}<button class="btn primary" onclick="openNewTest()">New test repair</button></div></div>
+      <div class="bar"><button class="btn" onclick="openLists()">Lists</button>${STANDARDS_ON ? '<button class="btn" onclick="openStandards()">Test standards</button>' : ''}<button class="btn primary" onclick="openNewTest()">New test repair</button></div></div>
     <div class="tabs">
       <button class="tab ${listTab === 'queue' ? 'on' : ''}" onclick="listTab='queue';renderList()">Repair Queue repairs</button>
       <button class="tab ${listTab === 'test' ? 'on' : ''}" onclick="listTab='test';renderList()">Test repairs</button>
@@ -317,7 +341,8 @@ async function openFromTicket(ticketId) {
     const row = {
       repair_ticket_id: t.id, is_test: false, freshdesk_ticket: String(t.ticket_number || '').replace(/[^0-9]/g, '') || null,
       customer_name: t.customer_name || null, email: t.customer_email || null, phone: t.customer_phone || null, address: t.customer_address || null,
-      model: sm.model || null, serial_number: t.serial_number || null, caliber: sm.cal || null, warranty: rqWarranty(t.warranty) || null,
+      model: cleanModel(sm.model) || null, serial_number: t.serial_number || null, caliber: normCal(sm.cal || calFrom(t.model)) || null,
+      barrel_length: barrelFrom(t.model) || null, warranty: rqWarranty(t.warranty) || null,
       received_at: dateToIso(t.arrived_date), created_by: me, step: 'Received'
     };
     const sources = {};
@@ -346,7 +371,7 @@ function openNewTest() {
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
 async function createTest() {
   const v = id => document.getElementById(id).value.trim();
-  const row = { is_test: true, freshdesk_ticket: v('n-ticket').replace(/[^0-9]/g, '') || null, customer_name: v('n-cust') || null, model: v('n-model') || null,
+  const row = { is_test: true, freshdesk_ticket: v('n-ticket').replace(/[^0-9]/g, '') || null, customer_name: v('n-cust') || null, model: cleanModel(v('n-model')) || null,
     serial_number: v('n-serial') || null, received_at: dateToIso(v('n-rec')), created_by: me, step: 'Received' };
   if (!row.freshdesk_ticket && !row.customer_name) return toast('Enter a Freshdesk ticket # or a customer name.', true);
   const sources = {}; ['customer_name', 'model', 'serial_number', 'freshdesk_ticket'].forEach(k => { if (row[k]) sources[k] = 'Typed in'; });
@@ -377,6 +402,13 @@ async function prefill(id, quiet) {
     const cur = records.find(x => x.id === id) || r;
     const patch = {}, sources = Object.assign({}, cur.sources || {});
     const filled = [];
+    if (out.fields && out.fields.model) {
+      const raw = out.fields.model;
+      out.fields.model = cleanModel(raw) || raw;
+      const c = calFrom(raw), b = barrelFrom(raw);
+      if (c && !out.fields.caliber) { out.fields.caliber = c; out.sources.caliber = out.sources.model; }
+      if (b && !out.fields.barrel_length) { out.fields.barrel_length = b; out.sources.barrel_length = out.sources.model; }
+    }
     Object.keys(out.fields || {}).forEach(k => {
       if (!FIELDS.some(f => f[0] === k)) return;
       const src = out.sources[k], val = out.fields[k];
@@ -485,6 +517,9 @@ async function saveOther(k, v) {
   v = String(v || '').trim();
   if (!v) { renderRecord(true); return; }
   const kind = PICK_FIELDS[k];
+  if (kind === 'model') v = cleanModel(v) || v;
+  if (kind === 'caliber') v = normCal(v) || v;
+  if (kind === 'barrel') v = /^\d{3}$/.test(v) ? v + 'mm' : v.replace(/\s+mm$/i, 'mm');
   if (!options.some(o => o.kind === kind && o.value.toLowerCase() === v.toLowerCase())) {
     // Add it to the shared list so the next repair can pick it
     const { data } = await sb.from('rr_options').insert({ kind, value: v, added_by: me }).select().single();
@@ -1164,7 +1199,7 @@ function reportHtml(r) {
     <div class="rhead"><img src="${FX_LOGO}" alt="FX Airguns" style="height:34px;"><div style="text-align:right;"><div class="rtitle">SERVICE REPORT</div>
       <div>${r.freshdesk_ticket ? 'Ticket #' + esc(r.freshdesk_ticket) + ' · ' : ''}${fmtDate(r.qc_at || today)}</div></div></div>
     <h3>Customer &amp; rifle</h3>
-    <div class="kv">${kv('Customer', r.customer_name)}${kv('Model', r.model ? (/^fx\b/i.test(r.model) ? r.model : 'FX ' + r.model) : '')}${kv('Email', r.email)}${kv('Serial #', r.serial_number)}${kv('Phone', r.phone)}${kv('Caliber', r.caliber)}${kv('Received', fmtDate(r.received_at))}${kv('Barrel length', r.barrel_length)}${kv('Completed', fmtDate(r.qc_at || today))}${kv('Warranty', warr)}</div>`;
+    <div class="kv">${kv('Customer', r.customer_name)}${kv('Model', r.model ? (/^fx/i.test(r.model) ? r.model : 'FX ' + r.model) : '')}${kv('Email', r.email)}${kv('Serial #', r.serial_number)}${kv('Phone', r.phone)}${kv('Caliber', r.caliber)}${kv('Received', fmtDate(r.received_at))}${kv('Barrel length', r.barrel_length)}${kv('Completed', fmtDate(r.qc_at || today))}${kv('Warranty', warr)}</div>`;
   if (r.issue) h += `<h3>What you told us</h3><div class="say">${esc(r.issue)}</div>`;
   // As-received assessment: every row (customer sections only)
   h += `<h3>Assessment as received</h3><p style="margin:0 0 6px;color:#5a6168;">Recorded when the rifle arrived, before any adjustment, cleaning or repair.</p>`;
@@ -1204,7 +1239,7 @@ function reportHtml(r) {
 }
 function defaultMessage(r) {
   const first = String(r.customer_name || '').trim().split(/\s+/)[0] || 'there';
-  const model = r.model ? (/^fx\b/i.test(r.model) ? r.model : 'FX ' + r.model) : 'rifle';
+  const model = r.model ? (/^fx/i.test(r.model) ? r.model : 'FX ' + r.model) : 'rifle';
   return `Hi ${first},\n\nThe repair on your ${model}${r.serial_number ? ' (serial ' + r.serial_number + ')' : ''} is complete and it has passed our final quality check.\n\nYour Service Report is attached. It shows what we found when the rifle arrived, the work we did, and the test results.\n\nWe'll send you the tracking number as soon as it ships.\n\nThank you for your patience,\nFX Airguns Service Team`;
 }
 function renderReport(r) {
@@ -1272,6 +1307,57 @@ async function sendReport() {
   }
 }
 
+// ── LISTS PAGE (models, calibers, barrel lengths) ───────
+const LIST_KINDS = [['model', 'Models', 'model', 'e.g. Impact M4'], ['caliber', 'Calibers', 'caliber', 'e.g. .30'], ['barrel', 'Barrel lengths', 'barrel_length', 'e.g. 600mm']];
+async function openLists() { view = 'lists'; openRecordId = null; await loadAll(); renderLists(); }
+function renderLists() {
+  const v = document.getElementById('view');
+  v.innerHTML = `<a href="#" onclick="backToList();return false;" style="color:var(--teal);font-size:13px;text-decoration:none;">← Repairs</a>
+    <h1>Lists</h1><p class="lede">The dropdown choices on page 1. Model names are just the name; only Impacts keep the generation (M2, M3, M4, X). Renaming a value also changes the repair records that use it.</p>
+    <div class="layout" style="margin-top:6px;">${LIST_KINDS.map(([kind, title, , ph]) => {
+      const list = options.filter(o => o.kind === kind);
+      return `<div class="card" style="flex:1 1 300px;display:flex;flex-direction:column;gap:6px;"><h2>${title} <span class="note">(${list.length})</span></h2>
+        ${list.map(o => `<div class="prow" style="margin:0;"><input value="${esc(o.value)}" onchange="renameOpt(${o.id}, this.value)" aria-label="${esc(title)} value"><button class="btn sm ghost" onclick="deleteOpt(${o.id})">Remove</button></div>`).join('') || '<span class="note">Empty.</span>'}
+        <div class="prow" style="margin:6px 0 0;"><input id="add-${kind}" placeholder="${esc(ph)}" onkeydown="if(event.key==='Enter')addOpt('${kind}')"><button class="btn sm" onclick="addOpt('${kind}')">Add</button></div></div>`;
+    }).join('')}</div>`;
+}
+function tidyOpt(kind, v) {
+  v = String(v || '').trim(); if (!v) return '';
+  if (kind === 'model') return cleanModel(v) || v;
+  if (kind === 'caliber') return normCal(v) || v;
+  if (kind === 'barrel') return /^\d{3}$/.test(v) ? v + 'mm' : v.replace(/\s+mm$/i, 'mm');
+  return v;
+}
+async function addOpt(kind) {
+  const el = document.getElementById('add-' + kind), v = tidyOpt(kind, el.value);
+  if (!v) return;
+  if (options.some(o => o.kind === kind && o.value.toLowerCase() === v.toLowerCase())) { toast('“' + v + '” is already on the list.', true); return; }
+  const { data, error } = await sb.from('rr_options').insert({ kind, value: v, added_by: me }).select().single();
+  if (error) return toast('Could not add: ' + error.message, true);
+  options.push(data); renderLists(); toast('Added ' + v);
+}
+async function renameOpt(id, raw) {
+  const o = options.find(x => x.id === id); if (!o) return;
+  const v = tidyOpt(o.kind, raw);
+  if (!v || v === o.value) { renderLists(); return; }
+  const dupe = options.find(x => x.kind === o.kind && x.id !== id && x.value.toLowerCase() === v.toLowerCase());
+  const col = (LIST_KINDS.find(k => k[0] === o.kind) || [])[2];
+  const using = records.filter(r => String(r[col] || '').toLowerCase() === o.value.toLowerCase()).length;
+  const msg = dupe ? `“${v}” is already on the list. Merge “${o.value}” into it?` : `Rename “${o.value}” to “${v}”?`;
+  if (!confirm(msg + (using ? `\n\n${using} repair record${using > 1 ? 's use' : ' uses'} it and will be updated too.` : ''))) { renderLists(); return; }
+  if (using) { const { error } = await sb.from('rr_records').update({ [col]: v }).ilike(col, o.value); if (error) return toast('Could not update records: ' + error.message, true); }
+  if (dupe) await sb.from('rr_options').delete().eq('id', id);
+  else { const { error } = await sb.from('rr_options').update({ value: v }).eq('id', id); if (error) return toast('Could not rename: ' + error.message, true); }
+  await loadAll(); renderLists(); toast(dupe ? 'Merged into ' + v : 'Renamed to ' + v);
+}
+async function deleteOpt(id) {
+  const o = options.find(x => x.id === id); if (!o) return;
+  if (!confirm(`Remove “${o.value}” from the list?\n\nRecords that already use it keep it.`)) return;
+  const { error } = await sb.from('rr_options').delete().eq('id', id);
+  if (error) return toast('Could not remove: ' + error.message, true);
+  options = options.filter(x => x.id !== id); renderLists();
+}
+
 // ── TEST STANDARDS PAGE ─────────────────────────────────
 const STD_COLS = [['model', 'Model', 'e.g. DRS MkII'], ['caliber', 'Caliber', '.30'], ['pellet', 'Pellet (blank = any)', ''], ['grains', 'Grains', ''], ['fps_min', 'Min fps', ''], ['fps_max', 'Max fps', ''],
   ['es_max', 'Max ES', ''], ['sd_max', 'Max SD', ''], ['acc_distance_yd', 'Accuracy yd', ''], ['acc_group_in', 'Max group (in)', ''], ['notes', 'Notes', '']];
@@ -1313,7 +1399,7 @@ function subscribeLive() {
 }
 function onLive() { clearTimeout(liveT); liveT = setTimeout(liveApply, 800); }
 async function liveApply() {
-  if (view === 'phone' || view === 'standards') return;
+  if (view === 'phone' || view === 'standards' || view === 'lists') return;
   if (typing() || saveTimer || qcTimer || saving || document.getElementById('modal').classList.contains('open')) { liveT = setTimeout(liveApply, 1500); return; }
   try { await loadAll(); if (openRecordId) await loadEvents(openRecordId); } catch (e) { return; }
   if (view === 'record') renderRecord(true); else renderRows();
