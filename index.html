@@ -148,6 +148,9 @@ input.need{border-color:var(--warn);background:var(--warn-soft)}
 #sugg button:last-child{border-bottom:0}
 #sugg button.on,#sugg button:hover{background:var(--teal-dk)}
 #sugg .pn{font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--teal-soft);min-width:96px}
+.shipgrid{display:grid;grid-template-columns:180px 1fr;gap:10px}
+.shipline{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px}
+.shipline b{color:var(--muted);font-weight:600;margin-right:4px}
 .callrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:4px}
 .opt.pass.on{background:var(--teal);border-color:var(--teal);color:#0f1214}
 .opt.fail.on{background:var(--red);border-color:var(--red);color:#0f1214}
@@ -212,7 +215,16 @@ const STANDARDS_ON = false;
 // The tab always follows the step
 const STEP_TAB = { 'Received': 'Assessment', 'Assessment': 'Assessment', 'Quote': 'Assessment', 'Repair': 'Work performed', 'Testing': 'Testing', 'QC': 'QC', 'Ready to ship': 'Report', 'Shipped': 'Report' };
 // Steps that move on only with the "done" button inside their tab (so who/when is recorded)
-const DONE_IN_TAB = { 'Assessment': 'Finish it with the button at the bottom of the Assessment tab.', 'Repair': 'Mark the repair done at the bottom of Work performed.', 'Testing': 'Finish it at the bottom of the Testing tab.', 'QC': 'Sign off at the bottom of the QC tab.' };
+const DONE_IN_TAB = { 'Assessment': 'Finish it with the button at the bottom of the Assessment tab.', 'Repair': 'Mark the repair done at the bottom of Work performed.', 'Testing': 'Finish it at the bottom of the Testing tab.', 'QC': 'Sign off at the bottom of the QC tab.', 'Ready to ship': 'Add the tracking # under Return shipment and send the report. Shipped is stamped from FedEx.' };
+const CARRIERS = ['FedEx', 'UPS', 'USPS', 'Other', 'Customer pickup'];
+const SURVEY_DAYS = 5;
+function trackUrl(carrier, n) {
+  n = encodeURIComponent(String(n || '').trim()); if (!n) return '';
+  if (carrier === 'UPS') return 'https://www.ups.com/track?tracknum=' + n;
+  if (carrier === 'USPS') return 'https://tools.usps.com/go/TrackConfirmAction?tLabels=' + n;
+  if (carrier === 'FedEx' || !carrier) return 'https://www.fedex.com/fedextrack/?trknbr=' + n;
+  return '';
+}
 const PICK_FIELDS = { model: 'model', caliber: 'caliber', barrel_length: 'barrel' };   // page-1 fields with a dropdown
 const QC_CHECKS = [
   ['leak', 'Holds pressure, no air leaks'],
@@ -338,6 +350,8 @@ function stepCell(r) {
   let h = `<span class="pill step">${esc(r.step || 'Received')}</span>`;
   if (r.hold_reason) h += ` <span class="pill hold">On hold</span>`;
   if (c) h += ` <span class="pill ${c.late ? 'late' : ''}">${c.done ? c.day + ' days total' : 'Day ' + c.day + ' of ' + CLOCK_DAYS}</span>`;
+  if (r.delivered_at) h += ` <span class="pill step">Delivered ${fmtDate(r.delivered_at)}</span>`;
+  else if (r.return_tracking) h += ` <span class="pill">${esc(r.ship_status || 'Tracking added')}</span>`;
   return h;
 }
 function renderRows() {
@@ -1290,7 +1304,7 @@ function reportHtml(r) {
     <div class="rhead"><img src="${FX_LOGO}" alt="FX Airguns" style="height:34px;"><div style="text-align:right;"><div class="rtitle">SERVICE REPORT</div>
       <div>${r.freshdesk_ticket ? 'Ticket #' + esc(r.freshdesk_ticket) + ' · ' : ''}${fmtDate(r.qc_at || today)}</div></div></div>
     <h3>Customer &amp; rifle</h3>
-    <div class="kv">${kv('Customer', r.customer_name)}${kv('Model', r.model ? (/^fx/i.test(r.model) ? r.model : 'FX ' + r.model) : '')}${kv('Email', r.email)}${kv('Serial #', r.serial_number)}${kv('Phone', r.phone)}${kv('Caliber', r.caliber)}${kv('Received', fmtDate(r.received_at))}${kv('Barrel length', r.barrel_length)}${kv('Completed', fmtDate(r.qc_at || today))}${kv('Warranty', warr)}</div>`;
+    <div class="kv">${kv('Customer', r.customer_name)}${kv('Model', r.model ? (/^fx/i.test(r.model) ? r.model : 'FX ' + r.model) : '')}${kv('Email', r.email)}${kv('Serial #', r.serial_number)}${kv('Phone', r.phone)}${kv('Caliber', r.caliber)}${kv('Received', fmtDate(r.received_at))}${kv('Barrel length', r.barrel_length)}${kv('Completed', fmtDate(r.qc_at || today))}${kv('Warranty', warr)}${r.return_tracking ? kv('Return shipment', (r.ship_carrier || 'FedEx') + ' ' + r.return_tracking) : ''}</div>`;
   if (r.issue) h += `<h3>What you told us</h3><div class="say">${esc(r.issue)}</div>`;
   // As-received assessment: every row (customer sections only)
   h += `<h3>Assessment as received</h3><p style="margin:0 0 6px;color:#5a6168;">Recorded when the rifle arrived, before any adjustment, cleaning or repair.</p>`;
@@ -1331,18 +1345,90 @@ function reportHtml(r) {
 function defaultMessage(r) {
   const first = String(r.customer_name || '').trim().split(/\s+/)[0] || 'there';
   const model = r.model ? (/^fx/i.test(r.model) ? r.model : 'FX ' + r.model) : 'rifle';
-  return `Hi ${first},\n\nThe repair on your ${model}${r.serial_number ? ' (serial ' + r.serial_number + ')' : ''} is complete and it has passed our final quality check.\n\nYour Service Report is attached. It shows what we found when the rifle arrived, the work we did, and the test results.\n\nWe'll send you the tracking number as soon as it ships.\n\nThank you for your patience,\nFX Airguns Service Team`;
+  const carrier = r.ship_carrier || 'FedEx', url = trackUrl(carrier, r.return_tracking);
+  const ship = carrier === 'Customer pickup' ? '\n\nYour rifle is ready for pickup.'
+    : r.return_tracking ? `\n\nYour rifle is on its way back to you. ${carrier} tracking number: ${r.return_tracking}${url ? '\n' + url : ''}` : '';
+  return `Hi ${first},\n\nThe repair on your ${model}${r.serial_number ? ' (serial ' + r.serial_number + ')' : ''} is complete and it has passed our final quality check.\n\nYour Service Report is attached. It shows what we found when the rifle arrived, the work we did, and the test results.${ship}\n\nThank you for your patience,\nFX Airguns Service Team`;
+}
+function surveyDueText(r) {
+  if (!r.survey_due_at) return '';
+  const days = Math.ceil((new Date(r.survey_due_at).getTime() - Date.now()) / DAY);
+  return fmtDate(r.survey_due_at) + (days > 1 ? ' (in ' + days + ' days)' : days === 1 ? ' (tomorrow)' : days === 0 ? ' (today)' : ' (due)');
+}
+function shipBox(r) {
+  const atShip = STEPS.indexOf(r.step) >= STEPS.indexOf('Ready to ship');
+  const carrier = r.ship_carrier || 'FedEx', pickup = carrier === 'Customer pickup';
+  if (!atShip && !r.return_tracking) return `<div class="card"><h2>Return shipment</h2><p class="note" style="margin-top:6px;">Opens once QC has passed.</p></div>`;
+  const url = trackUrl(carrier, r.return_tracking);
+  const line = (k, v) => v ? `<span><b>${k}</b>${v}</span>` : '';
+  return `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><div class="bar" style="justify-content:space-between;"><h2>Return shipment</h2>
+      <button class="btn sm" disabled title="Comes with the FedEx label integration">Create FedEx label (coming)</button></div>
+    <div class="shipgrid"><label class="l">Carrier<select onchange="saveShip('ship_carrier', this.value)">${CARRIERS.map(x => `<option ${x === carrier ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
+      ${pickup ? '<div class="note" style="align-self:end;padding-bottom:10px;">No tracking needed. Use “Mark delivered” when the customer picks it up.</div>'
+        : `<label class="l">Tracking #<input id="trk" value="${esc(r.return_tracking || '')}" placeholder="Paste the tracking number" onchange="saveShip('return_tracking', this.value)"></label>`}</div>
+    <div class="shipline">${line('Status', r.return_tracking ? esc(r.ship_status || (carrier === 'FedEx' ? 'Waiting for the first FedEx check' : 'Not checked automatically')) + (r.ship_checked_at ? ' <span class="note">(checked ' + fmtDT(r.ship_checked_at) + ')</span>' : '') : '')}
+      ${line('Shipped', r.shipped_at ? fmtDate(r.shipped_at) : '')}${line('Delivered', r.delivered_at ? fmtDate(r.delivered_at) : '')}${line('Survey due', surveyDueText(r))}
+      ${url ? `<span><a href="${esc(url)}" target="_blank" rel="noopener" style="color:var(--teal);">Track ${esc(carrier)} →</a></span>` : ''}</div>
+    <div class="bar">
+      ${carrier === 'FedEx' && r.return_tracking && !r.delivered_at ? `<button class="btn sm" id="chk-btn" onclick="checkShipNow()">Check FedEx now</button>` : ''}
+      ${!r.shipped_at && !pickup ? `<button class="btn sm ghost" onclick="markShipped()">Mark shipped now</button>` : ''}
+      ${!r.delivered_at ? `<button class="btn sm ghost" onclick="markDelivered()">Mark delivered${pickup ? ' (picked up)' : ''}</button>` : ''}
+      <span class="note">${carrier === 'FedEx' ? 'FedEx is checked every 30 minutes: Shipped at the pickup scan, Delivered at delivery.' : 'Not FedEx: mark shipped and delivered by hand.'}</span></div></div>`;
+}
+async function saveShip(k, v) {
+  const r = curRec(); if (!r) return;
+  v = k === 'return_tracking' ? String(v || '').replace(/[^A-Za-z0-9]/g, '') : String(v || '');
+  if ((r[k] || '') === v) return;
+  const patch = { [k]: v || null };
+  if (k === 'return_tracking') { patch.ship_status = null; patch.ship_checked_at = null; if (!r.ship_carrier) patch.ship_carrier = 'FedEx'; }
+  if (k === 'ship_carrier' && v === 'Customer pickup') { patch.return_tracking = null; patch.ship_status = null; }
+  if (await patchRecord(patch)) {
+    await logEvent(r.id, 'ship', k === 'return_tracking' ? (v ? 'Tracking # added: ' + v : 'Tracking # removed') : 'Carrier: ' + v);
+    sendMsg = null;                       // redraft the message so it carries the tracking
+    await loadEvents(r.id); renderRecord(true);
+    if (k === 'return_tracking' && v) toast('Tracking saved. The message now includes it.');
+  }
+}
+async function markShipped() {
+  const r = curRec(); if (!r) return;
+  const now = new Date().toISOString(), st = Object.assign({}, r.step_times || {}); st.Shipped = st.Shipped || now;
+  if (await patchRecord({ shipped_at: now, step: 'Shipped', step_times: st })) { await logEvent(r.id, 'ship', 'Marked shipped by hand'); await loadEvents(r.id); renderRecord(true); toast('Marked shipped. The 14-day clock stopped.'); }
+}
+async function markDelivered() {
+  const r = curRec(); if (!r) return;
+  const pickup = r.ship_carrier === 'Customer pickup';
+  if (!confirm(pickup ? 'Mark it picked up by the customer?' : 'Mark it delivered? The survey will be due in ' + SURVEY_DAYS + ' days.')) return;
+  const now = new Date().toISOString(), patch = { delivered_at: now, survey_due_at: new Date(Date.now() + SURVEY_DAYS * DAY).toISOString() };
+  if (!r.shipped_at) { const st = Object.assign({}, r.step_times || {}); st.Shipped = st.Shipped || now; Object.assign(patch, { shipped_at: now, step: 'Shipped', step_times: st }); }
+  if (await patchRecord(patch)) { await logEvent(r.id, 'ship', (pickup ? 'Picked up by the customer' : 'Marked delivered by hand') + '. Survey due in ' + SURVEY_DAYS + ' days'); await loadEvents(r.id); renderRecord(true); toast('Survey due ' + fmtDate(patch.survey_due_at)); }
+}
+async function checkShipNow() {
+  const r = curRec(); if (!r) return;
+  const b = document.getElementById('chk-btn'); if (b) { b.disabled = true; b.textContent = 'Checking…'; }
+  try {
+    const { data: s } = await sb.auth.getSession();
+    const res = await fetch(SERVER + '/repair-record/check-shipment', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (s && s.session ? s.session.access_token : '') }, body: JSON.stringify({ record_id: r.id }) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || 'failed (' + res.status + ')');
+    const { data } = await sb.from('rr_records').select('*').eq('id', r.id).single(); if (data) Object.assign(r, data);
+    await loadEvents(r.id); renderRecord(true); toast('FedEx: ' + (out.fedex || r.ship_status || 'checked'));
+  } catch (e) { toast('Could not check FedEx: ' + e.message, true); if (b) { b.disabled = false; b.textContent = 'Check FedEx now'; } }
 }
 function renderReport(r) {
   const miss = reportReady(r);
   if (sendMsg == null) sendMsg = defaultMessage(r);
-  let h = '';
-  if (r.report_sent_at) h += `<div class="sentbox">Sent to Freshdesk ticket #${esc(r.freshdesk_ticket)} by ${esc(fullName(r.report_sent_by))} on ${fmtDT(r.report_sent_at)}${r.report_file ? ' · ' + esc(r.report_file) : ''}</div>`;
+  let h = shipBox(r);
+  if (r.report_sent_at) h += `<div class="sentbox">Sent to Freshdesk ticket #${esc(r.freshdesk_ticket)} by ${esc(fullName(r.report_sent_by))} on ${fmtDT(r.report_sent_at)}${r.report_tracking ? ' · with tracking ' + esc(r.report_tracking) : ''}${r.report_file ? ' · ' + esc(r.report_file) : ''}</div>`;
   if (miss.length) h += `<div class="holdbox"><b>Not finished yet: ${esc(miss.join(', '))}</b><span class="note" style="color:var(--warn);">You can preview the report now. It can be sent once every step is done.</span></div>`;
   h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;">
       <div class="bar" style="justify-content:space-between;"><h2>Send to the customer</h2><button class="btn sm" onclick="downloadReport()">Download PDF</button></div>
       <label class="l">Message (goes in the Freshdesk reply, with the PDF attached)<textarea id="send-msg" rows="9" oninput="sendMsg=this.value">${esc(sendMsg)}</textarea></label>
-      <div class="bar"><button class="btn primary" id="send-btn" ${miss.length || !r.freshdesk_ticket ? 'disabled' : ''} onclick="sendReport()">${r.report_sent_at ? 'Send again' : 'Send'} to Freshdesk ticket #${esc(r.freshdesk_ticket || '?')}</button>
+      <div class="bar">${(() => {
+        const pickup = r.ship_carrier === 'Customer pickup', has = !!r.return_tracking, off = miss.length || !r.freshdesk_ticket;
+        const label = pickup ? 'Send report (pickup)' : has ? 'Send report + tracking' : 'Add the tracking # above to send';
+        return `<button class="btn primary" id="send-btn" ${off || (!has && !pickup) ? 'disabled' : ''} onclick="sendReport()">${r.report_sent_at && (has || pickup) ? 'Send again: ' : ''}${label} → #${esc(r.freshdesk_ticket || '?')}</button>` +
+          (!has && !pickup ? `<button class="btn sm" ${off ? 'disabled' : ''} onclick="sendReport(true)">Send without tracking</button>` : '');
+      })()}
       <button class="btn sm ghost" onclick="sendMsg=null;renderRecord(true)">Reset message</button><span class="note" id="send-note">${!r.freshdesk_ticket ? 'Add the Freshdesk # on page 1 first.' : 'Testing: only works on a ticket listed as a test ticket on the server.'}</span></div></div>
     <div class="card"><h2 style="margin-bottom:10px;">Preview</h2><div class="repwrap">${reportHtml(r)}</div></div>`;
   return h;
@@ -1375,8 +1461,9 @@ async function downloadReport() {
   toast('Making the PDF…');
   try { await makePdf(r, 'save'); } catch (e) { toast('Could not make the PDF: ' + e.message, true); }
 }
-async function sendReport() {
+async function sendReport(noTracking) {
   const r = curRec(); if (!r) return;
+  if (!noTracking && !r.return_tracking && r.ship_carrier !== 'Customer pickup') return toast('Add the tracking # first, or use “Send without tracking”.', true);
   const miss = reportReady(r); if (miss.length) return toast('Not finished yet: ' + miss.join(', '), true);
   const msg = String(sendMsg || '').trim(); if (!msg) return toast('Write a message first.', true);
   if (!confirm(`Send the Service Report to Freshdesk ticket #${r.freshdesk_ticket}?\n\nThe customer on that ticket gets this reply with the PDF attached.`)) return;
@@ -1387,7 +1474,7 @@ async function sendReport() {
     note.textContent = 'Sending to Freshdesk…';
     const { data: s } = await sb.auth.getSession();
     const res = await fetch(SERVER + '/repair-record/send-report', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (s && s.session ? s.session.access_token : '') },
-      body: JSON.stringify({ record_id: r.id, message: msg, filename: reportFileName(r), pdf_base64: String(uri).split(',')[1] }) });
+      body: JSON.stringify({ record_id: r.id, message: msg, filename: reportFileName(r), pdf_base64: String(uri).split(',')[1], tracking: noTracking ? '' : (r.return_tracking || '') }) });
     const out = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(out.error || 'failed (' + res.status + ')');
     const { data } = await sb.from('rr_records').select('*').eq('id', r.id).single();
