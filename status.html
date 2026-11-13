@@ -50,7 +50,18 @@ li.now .st{font-family:'Barlow Condensed',sans-serif;font-size:24px;line-height:
 .track a{display:inline-block;margin-top:8px;background:var(--ink);color:var(--panel);text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600}
 .track a:focus-visible{outline:3px solid var(--pick);outline-offset:2px}
 .help{color:var(--slate);font-size:15px;margin-top:22px}
+.help.wide{display:none}
 @media (max-width:420px){h1{font-size:38px}h1 .rifle{font-size:46px}.panel{padding:18px 16px}}
+@media (min-width:880px){
+  .wrap{max-width:1040px;padding:56px 40px 64px}
+  .logo{margin-bottom:56px}
+  .cols{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:64px;align-items:start}
+  .intro{position:sticky;top:40px}
+  h1{font-size:56px}h1 .rifle{font-size:76px}
+  .lede{font-size:19px}
+  .panel{padding:30px 32px}
+  .help.wide{display:block}.help.narrow{display:none}
+}
 </style>
 </head>
 <body>
@@ -73,18 +84,20 @@ function show(d) {
     : now.name === 'Shipped' ? 'Your rifle is on its way back to you.'
     : now.name === 'Ready to ship' ? (d.pickup ? 'Your rifle is ready for pickup.' : 'Your rifle is repaired, tested and ready to ship.')
     : 'Here’s where your repair is right now. This page updates as we work.';
+  const help = `Have a question about your repair? Reply to your support ticket${d.ticket ? ' #' + esc(d.ticket) : ''} and our team will get back to you.`;
+  if (now.name === 'Delivered') d.stages = d.stages.map(s => Object.assign({}, s, { done: true, now: false }));
   const rename = { 'Delivered': 'Picked up', 'Ready to ship': 'Ready for pickup' };
   const stages = d.pickup ? d.stages.filter(s => s.name !== 'Shipped').map(s => rename[s.name] ? Object.assign({}, s, { name: rename[s.name] }) : s) : d.stages;
-  app.innerHTML = `${LOGO}
+  app.innerHTML = `${LOGO}<div class="cols"><div class="intro">
     <h1>${d.first ? esc(d.first) + ', your' : 'Your'}<span class="rifle">${esc(String(d.model || 'rifle').replace(/^FX\s+/i, ''))}</span>repair</h1>
     <p class="lede">${esc(lede)}</p>
+    <p class="help wide">${help}</p></div>
     <section class="panel" aria-label="Repair progress">
       ${d.waiting && !now.name.match(/Shipped|Delivered/) ? `<p class="hold">${esc(d.waiting)}</p>` : ''}
       <ol>${stages.map(s => `<li class="${s.done ? 'done' : s.now ? 'now' : 'todo'}"${s.now ? ' aria-current="step"' : ''}><span class="dot" aria-hidden="true"></span>
         <div class="st">${esc(s.name)}</div>${s.at ? `<div class="when">${esc(day(s.at))}</div>` : ''}</li>`).join('')}</ol>
       ${d.tracking ? `<div class="track"><div><b>${esc(d.tracking.carrier)}</b> tracking number ${esc(d.tracking.number)}</div>${d.tracking.url ? `<a href="${esc(d.tracking.url)}" target="_blank" rel="noopener">Track your package</a>` : ''}</div>` : ''}
-    </section>
-    <p class="help">Have a question about your repair? Reply to your support ticket${d.ticket ? ' #' + esc(d.ticket) : ''} and our team will get back to you.</p>`;
+    </section><p class="help narrow">${help}</p></div>`;
 }
 
 (async () => {
