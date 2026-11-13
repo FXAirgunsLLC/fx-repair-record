@@ -157,6 +157,11 @@ input.need{border-color:var(--warn);background:var(--warn-soft)}
 .kpi{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
 .kpi b{display:block;font-family:'Barlow Condensed',sans-serif;font-size:30px;line-height:1.1}
 @media(max-width:760px){.kpis{grid-template-columns:1fr 1fr}}
+.pipe{display:flex;flex-wrap:wrap;gap:6px}
+.pipe div{flex:1 1 110px;background:var(--raised);border-radius:8px;padding:10px 12px}
+.pipe b{display:block;font-family:'Barlow Condensed',sans-serif;font-size:28px;line-height:1.1}
+.hbar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;min-width:80px}
+.hbar div{height:100%;background:var(--warn)}
 .callrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:4px}
 .opt.pass.on{background:var(--teal);border-color:var(--teal);color:#0f1214}
 .opt.fail.on{background:var(--red);border-color:var(--red);color:#0f1214}
@@ -250,7 +255,7 @@ const FIELDS = [
 const DAY = 86400000;
 
 // ── STATE ───────────────────────────────────────────────
-let parts = [], partsByPn = {}, partsLoaded = false, surveys = [];
+let parts = [], partsByPn = {}, partsLoaded = false, surveys = [], holdEvents = [], holdLoaded = false, dashRange = '90';
 let me = '', tickets = [], records = [], view = 'list', listTab = 'queue', q = '', openRecordId = null, events = [], options = [], otherFor = null;
 
 // ── HELPERS ─────────────────────────────────────────────
@@ -347,6 +352,7 @@ function renderList() {
     <div class="tabs">
       <button class="tab ${listTab === 'queue' ? 'on' : ''}" onclick="listTab='queue';renderList()">Repair Queue repairs</button>
       <button class="tab ${listTab === 'test' ? 'on' : ''}" onclick="listTab='test';renderList()">Test repairs</button>
+      <button class="tab ${listTab === 'dash' ? 'on' : ''}" onclick="listTab='dash';renderList()">Dashboard</button>
       <button class="tab ${listTab === 'surveys' ? 'on' : ''}" onclick="listTab='surveys';renderList()">Surveys${surveys.filter(x => x.responded_at).length ? ' (' + surveys.filter(x => x.responded_at).length + ')' : ''}</button>
     </div>
     <div class="filters"><input id="q" placeholder="Search ticket #, customer, model, serial" value="${esc(q)}" oninput="q=this.value;renderRows()"></div>
@@ -389,9 +395,61 @@ function renderSurveys(el) {
       <td style="max-width:280px;">${esc(x.comment || '')}</td></tr>`).join('') + '</tbody></table></div>';
   el.innerHTML = h;
 }
+// ── MANAGEMENT DASHBOARD ────────────────────────────────
+async function loadHoldEvents() {
+  const { data } = await sb.from('rr_events').select('record_id,kind,text,minutes,at').in('kind', ['hold', 'resume']);
+  holdEvents = data || [];
+}
+function daysBetween(a, b) { return (new Date(b).getTime() - new Date(a).getTime()) / DAY; }
+function renderDash(el) {
+  if (!holdLoaded) { holdLoaded = true; loadHoldEvents().then(() => { if (listTab === 'dash' && view === 'list') renderRows(); }); }
+  const since = dashRange === 'all' ? 0 : Date.now() - Number(dashRange) * DAY;
+  const inRange = records.filter(r => r.received_at && new Date(r.received_at).getTime() >= since);
+  const open = records.filter(r => r.received_at && r.step !== 'Shipped');
+  const late = open.filter(r => clockOf(r).late);
+  const shipped = inRange.filter(r => r.step === 'Shipped' && r.step_times && r.step_times.Shipped);
+  const turn = shipped.map(r => daysBetween(r.received_at, r.step_times.Shipped));
+  const onTime = turn.length ? Math.round(turn.filter(d => d <= CLOCK_DAYS).length / turn.length * 100) + '%' : '—';
+  const avgTurn = turn.length ? (turn.reduce((a, b) => a + b, 0) / turn.length).toFixed(1) : '—';
+  // Average days spent in each step (from the step dates)
+  const per = {};
+  inRange.forEach(r => {
+    const st = r.step_times || {}, seen = STEPS.filter(x => st[x]);
+    seen.forEach((x, i) => { const nx = seen[i + 1]; if (!nx) return; const d = daysBetween(st[x], st[nx]); if (d >= 0) (per[x] = per[x] || []).push(d); });
+  });
+  // Hold reasons: finished holds (from history) + holds still open
+  const holds = {};
+  const add = (reason, days) => { const k = String(reason || 'Other').replace(/^Other: .*/, 'Other'); holds[k] = holds[k] || { n: 0, days: 0, open: 0 }; holds[k].n++; holds[k].days += days; return holds[k]; };
+  const ids = new Set(inRange.map(r => r.id));
+  holdEvents.filter(e => e.kind === 'resume' && ids.has(e.record_id) && e.minutes != null).forEach(e => { const m = String(e.text || '').match(/was: (.*?)\)/); add(m ? m[1] : 'Other', e.minutes / 1440); });
+  inRange.filter(r => r.hold_reason && r.hold_since).forEach(r => { add(r.hold_reason, daysBetween(r.hold_since, new Date().toISOString())).open++; });
+  const holdList = Object.entries(holds).sort((a, b) => b[1].days - a[1].days);
+  const maxHold = Math.max(1, ...holdList.map(([, h]) => h.days));
+  const risk = open.filter(r => clockOf(r).day >= 10).sort((a, b) => clockOf(b).day - clockOf(a).day);
+  const pipeSteps = STEPS.filter(x => x !== 'Shipped');
+  let h = `<div class="bar" style="justify-content:space-between;margin-bottom:12px;"><span class="note">Open repairs are shown whatever their date. Turnaround, step times and holds use repairs received in the period.</span>
+    <label class="l" style="flex-direction:row;align-items:center;gap:8px;">Period <select style="width:auto;" onchange="dashRange=this.value;renderRows()">${[['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['all', 'All time']].map(([v, l]) => `<option value="${v}" ${dashRange === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+  <div class="kpis"><div class="kpi"><b>${open.length}</b><span class="note">open repairs</span></div>
+    <div class="kpi"><b style="color:${late.length ? 'var(--red)' : 'inherit'}">${late.length}</b><span class="note">past ${CLOCK_DAYS} days</span></div>
+    <div class="kpi"><b>${onTime}</b><span class="note">shipped within ${CLOCK_DAYS} days (${turn.length} shipped)</span></div>
+    <div class="kpi"><b>${avgTurn}</b><span class="note">average days, received to shipped</span></div></div>
+  <div class="card" style="margin-bottom:14px;"><h2 style="margin-bottom:10px;">Where open repairs are</h2><div class="pipe">${pipeSteps.map(x => {
+      const n = open.filter(r => (r.step || 'Received') === x).length, hl = open.filter(r => (r.step || 'Received') === x && r.hold_reason).length;
+      return `<div><b>${n}</b><span class="note">${esc(x)}${hl ? ` · <span style="color:var(--warn)">${hl} on hold</span>` : ''}</span></div>`; }).join('')}</div></div>
+  <div class="layout" style="margin-top:0;">
+    <div class="card" style="flex:1 1 360px;"><h2 style="margin-bottom:8px;">Average days in each step</h2>
+      ${Object.keys(per).length ? `<table><tbody>${STEPS.filter(x => per[x]).map(x => { const a = per[x].reduce((p, q) => p + q, 0) / per[x].length; return `<tr><td>${esc(x)}</td><td class="num" style="font-size:18px;">${a.toFixed(1)}</td><td class="note">${per[x].length} repair${per[x].length > 1 ? 's' : ''}</td></tr>`; }).join('')}</tbody></table>` : '<span class="note">Not enough finished steps yet.</span>'}</div>
+    <div class="card" style="flex:1 1 420px;"><h2 style="margin-bottom:8px;">What holds repairs up</h2>
+      ${holdList.length ? `<table><thead><tr><th>Hold reason</th><th>Times</th><th>Total days</th><th></th></tr></thead><tbody>${holdList.map(([k, v]) => `<tr><td>${esc(k)}${v.open ? ` <span class="pill hold">${v.open} now</span>` : ''}</td><td>${v.n}</td><td class="num" style="font-size:18px;">${v.days.toFixed(1)}</td><td style="width:30%;"><div class="hbar"><div style="width:${Math.round(v.days / maxHold * 100)}%"></div></div></td></tr>`).join('')}</tbody></table>` : '<span class="note">No holds in this period.</span>'}</div></div>
+  <div class="card" style="margin-top:14px;"><h2 style="margin-bottom:8px;">Late or close to late (day 10+)</h2>
+    ${risk.length ? `<table><thead><tr><th>Day</th><th>Ticket #</th><th>Customer</th><th>Model</th><th>Step</th><th>Hold</th></tr></thead><tbody>${risk.map(r => { const c = clockOf(r);
+      return `<tr class="row" onclick="openRecord('${r.id}')"><td class="num" style="font-size:19px;color:${c.late ? 'var(--red)' : 'var(--warn)'};">${c.day}</td><td>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) : '—'}</td><td>${esc(r.customer_name || '')}${r.is_test ? ' <span class="pill test">TEST</span>' : ''}</td><td>${esc(r.model || '')}</td><td>${esc(r.step || '')}</td><td>${r.hold_reason ? `<span class="pill hold">${esc(r.hold_reason)}</span>` : ''}</td></tr>`; }).join('')}</tbody></table>` : '<span class="note">Nothing at day 10 or later. Nice.</span>'}</div>`;
+  el.innerHTML = h;
+}
 function renderRows() {
   const el = document.getElementById('rows'); if (!el) return;
   if (listTab === 'surveys') return renderSurveys(el);
+  if (listTab === 'dash') return renderDash(el);
   const s = q.trim().toLowerCase();
   const hit = (...xs) => !s || xs.join(' ').toLowerCase().includes(s);
   if (listTab === 'queue') {
@@ -562,6 +620,9 @@ function renderRecord(keepScroll) {
           ${FIELDS.map(([k, label]) => fieldHtml(r, k, label)).join('')}
           ${fieldHtml(r, '__received', 'Date received')}
         </div>
+        <div class="card" style="display:flex;flex-direction:column;gap:8px;"><h2>Customer status page</h2>
+          <span class="note">A private link the customer can open any time to see where the repair is. Read-only; questions go to their support ticket.</span>
+          <div class="bar"><button class="btn sm" onclick="copyStatusLink()">${r.status_token ? 'Copy link' : 'Make link and copy'}</button>${r.status_token ? `<a class="btn sm ghost" href="${esc(statusUrl(r))}" target="_blank" rel="noopener">Open</a>` : ''}</div></div>
       </div>
     </div>`;
   v.innerHTML = h;
@@ -605,6 +666,20 @@ async function saveOther(k, v) {
   }
   await saveField(k, v);
   renderRecord(true);
+}
+function statusUrl(r) { return location.origin + location.pathname.replace(/[^/]*$/, '') + 'status.html?t=' + encodeURIComponent(r.status_token || ''); }
+async function copyStatusLink() {
+  const r = curRec(); if (!r) return;
+  if (!r.status_token) {
+    const a = new Uint8Array(18); crypto.getRandomValues(a);
+    const tok = btoa(String.fromCharCode(...a)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    if (!(await patchRecord({ status_token: tok }))) return;
+    await logEvent(r.id, 'status', 'Customer status link created');
+    await loadEvents(r.id); renderRecord(true);
+  }
+  const link = statusUrl(r);
+  try { await navigator.clipboard.writeText(link); toast('Status link copied. Paste it into your Freshdesk reply.'); }
+  catch (e) { prompt('Copy the status link:', link); }
 }
 async function backToList() { if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); } view = 'list'; openRecordId = null; renderList(); }
 
@@ -1679,6 +1754,7 @@ async function liveApply() {
   if (view === 'phone' || view === 'standards' || view === 'lists') return;
   if (typing() || saveTimer || qcTimer || saving || document.getElementById('modal').classList.contains('open')) { liveT = setTimeout(liveApply, 1500); return; }
   try { await loadAll(); if (openRecordId) await loadEvents(openRecordId); } catch (e) { return; }
+  if (view === 'list' && listTab === 'dash') await loadHoldEvents();
   if (view === 'record') renderRecord(true); else renderRows();
 }
 
