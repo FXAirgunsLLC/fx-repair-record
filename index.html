@@ -151,6 +151,12 @@ input.need{border-color:var(--warn);background:var(--warn-soft)}
 .shipgrid{display:grid;grid-template-columns:180px 1fr;gap:10px}
 .shipline{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px}
 .shipline b{color:var(--muted);font-weight:600;margin-right:4px}
+.svbad{background:var(--red-soft)}
+.svbad td:first-child{box-shadow:inset 3px 0 0 var(--red)}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi b{display:block;font-family:'Barlow Condensed',sans-serif;font-size:30px;line-height:1.1}
+@media(max-width:760px){.kpis{grid-template-columns:1fr 1fr}}
 .callrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:4px}
 .opt.pass.on{background:var(--teal);border-color:var(--teal);color:#0f1214}
 .opt.fail.on{background:var(--red);border-color:var(--red);color:#0f1214}
@@ -244,7 +250,7 @@ const FIELDS = [
 const DAY = 86400000;
 
 // ── STATE ───────────────────────────────────────────────
-let parts = [], partsByPn = {}, partsLoaded = false;
+let parts = [], partsByPn = {}, partsLoaded = false, surveys = [];
 let me = '', tickets = [], records = [], view = 'list', listTab = 'queue', q = '', openRecordId = null, events = [], options = [], otherFor = null;
 
 // ── HELPERS ─────────────────────────────────────────────
@@ -306,6 +312,8 @@ async function loadAll() {
   tickets = a.data || []; records = b.data || [];
   const o = await sb.from('rr_options').select('*').order('sort', { ascending: true }).order('value', { ascending: true });
   options = o.error ? [] : (o.data || []);
+  const sv = await sb.from('rr_surveys').select('*').order('created_at', { ascending: false });
+  surveys = sv.error ? [] : (sv.data || []);
   if (!partsLoaded) loadParts();
 }
 async function loadParts() {
@@ -339,6 +347,7 @@ function renderList() {
     <div class="tabs">
       <button class="tab ${listTab === 'queue' ? 'on' : ''}" onclick="listTab='queue';renderList()">Repair Queue repairs</button>
       <button class="tab ${listTab === 'test' ? 'on' : ''}" onclick="listTab='test';renderList()">Test repairs</button>
+      <button class="tab ${listTab === 'surveys' ? 'on' : ''}" onclick="listTab='surveys';renderList()">Surveys${surveys.filter(x => x.responded_at).length ? ' (' + surveys.filter(x => x.responded_at).length + ')' : ''}</button>
     </div>
     <div class="filters"><input id="q" placeholder="Search ticket #, customer, model, serial" value="${esc(q)}" oninput="q=this.value;renderRows()"></div>
     <div id="rows"></div>`;
@@ -354,8 +363,35 @@ function stepCell(r) {
   else if (r.return_tracking) h += ` <span class="pill">${esc(r.ship_status || 'Tracking added')}</span>`;
   return h;
 }
+function svBad(x) { return x.fixed === 'No' || x.fixed === 'Partly' || x.performance === 'Not quite right' || (x.overall != null && x.overall <= 2); }
+function starTxt(n) { return n == null ? '—' : '★'.repeat(n) + '<span style="color:var(--line2)">' + '★'.repeat(5 - n) + '</span>'; }
+function renderSurveys(el) {
+  const s = q.trim().toLowerCase();
+  const rows = surveys.map(x => ({ x, r: records.find(r => r.id === x.record_id) || {} }))
+    .filter(({ x, r }) => !s || [r.freshdesk_ticket, r.customer_name, r.model, x.comment].join(' ').toLowerCase().includes(s));
+  const ans = surveys.filter(x => x.responded_at);
+  const avg = ans.length ? (ans.reduce((a, x) => a + (x.overall || 0), 0) / ans.length).toFixed(1) : '—';
+  const nps = ans.length ? Math.round((ans.filter(x => x.nps >= 9).length - ans.filter(x => x.nps <= 6).length) / ans.length * 100) : null;
+  const fixedPct = ans.length ? Math.round(ans.filter(x => x.fixed === 'Yes').length / ans.length * 100) + '%' : '—';
+  const sent = surveys.filter(x => x.sent_at).length;
+  let h = `<div class="kpis"><div class="kpi"><b>${ans.length} of ${sent}</b><span class="note">answered of sent</span></div>
+    <div class="kpi"><b>${avg}</b><span class="note">average overall (of 5)</span></div>
+    <div class="kpi"><b>${fixedPct}</b><span class="note">said the problem is fixed</span></div>
+    <div class="kpi"><b>${nps == null ? '—' : (nps > 0 ? '+' : '') + nps}</b><span class="note">recommend score (−100 to +100)</span></div></div>`;
+  if (!rows.length) { el.innerHTML = h + '<div class="empty">No surveys yet. They go out 5 days after delivery, or use “Send survey now” on a record’s Report tab.</div>'; return; }
+  h += `<p class="note" style="margin-bottom:8px;">Highlighted: problem not fully fixed, rifle not performing right, or 2 stars or less.</p>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Answered</th><th>Ticket #</th><th>Customer</th><th>Model</th><th>Overall</th><th>Fixed?</th><th>Performing</th><th>Communication</th><th>Turnaround</th><th>Recommend</th><th>Comment</th></tr></thead><tbody>` +
+    rows.map(({ x, r }) => `<tr class="row ${x.responded_at && svBad(x) ? 'svbad' : ''}" onclick="openRecord('${r.id}')">
+      <td>${x.responded_at ? fmtDate(x.responded_at) : `<span class="muted">${x.sent_at ? 'Sent ' + fmtDate(x.sent_at) + (x.opened_at ? ', opened' : '') : 'Not sent'}</span>`}</td>
+      <td class="num" style="color:var(--teal);">${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) : '—'}</td><td>${esc(r.customer_name || '')}${r.is_test ? ' <span class="pill test">TEST</span>' : ''}</td><td>${esc(r.model || '')}</td>
+      <td style="white-space:nowrap;">${x.responded_at ? starTxt(x.overall) : ''}</td><td>${esc(x.fixed || '')}</td><td>${esc(x.performance || '')}</td>
+      <td style="white-space:nowrap;">${x.responded_at ? starTxt(x.communication) : ''}</td><td>${esc(x.turnaround || '')}</td><td class="num" style="font-size:18px;">${x.nps ?? ''}</td>
+      <td style="max-width:280px;">${esc(x.comment || '')}</td></tr>`).join('') + '</tbody></table></div>';
+  el.innerHTML = h;
+}
 function renderRows() {
   const el = document.getElementById('rows'); if (!el) return;
+  if (listTab === 'surveys') return renderSurveys(el);
   const s = q.trim().toLowerCase();
   const hit = (...xs) => !s || xs.join(' ').toLowerCase().includes(s);
   if (listTab === 'queue') {
@@ -1414,10 +1450,40 @@ async function checkShipNow() {
     await loadEvents(r.id); renderRecord(true); toast('FedEx: ' + (out.fedex || r.ship_status || 'checked'));
   } catch (e) { toast('Could not check FedEx: ' + e.message, true); if (b) { b.disabled = false; b.textContent = 'Check FedEx now'; } }
 }
+function surveyBox(r) {
+  const x = surveys.find(v => v.record_id === r.id);
+  if (!r.delivered_at && !x) return '';
+  let h = `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><h2>Customer survey</h2>`;
+  if (x && x.responded_at) {
+    h += `<div class="${svBad(x) ? 'holdbox' : 'sentbox'}" style="display:flex;flex-direction:column;gap:4px;">
+      <b>Answered ${fmtDT(x.responded_at)}</b>
+      <span>Overall ${starTxt(x.overall)} · Fixed: ${esc(x.fixed)} · Performing: ${esc(x.performance)}</span>
+      <span>Communication ${starTxt(x.communication)} · Turnaround: ${esc(x.turnaround)} · Recommend: ${esc(x.nps)}/10</span>
+      ${x.comment ? `<span>“${esc(x.comment)}”</span>` : ''}</div>`;
+  } else {
+    const st = x && x.sent_at ? `Sent ${fmtDT(x.sent_at)} to ${esc(x.sent_to)}${x.sent_by === 'system' ? ' (automatically)' : ''}${x.opened_at ? ' · opened ' + fmtDT(x.opened_at) : ' · not opened yet'}`
+      : `Not sent yet.${r.survey_due_at ? ' Goes out automatically on ' + surveyDueText(r) + '.' : ''}`;
+    h += `<span>${st}</span>${x && x.email_error ? `<span class="note" style="color:var(--red);">Last try failed: ${esc(x.email_error)}</span>` : ''}
+      <div class="bar"><button class="btn sm" id="sv-btn" onclick="sendSurveyNow()">${x && x.sent_at ? 'Send again' : 'Send survey now'}</button>
+      <span class="note">Testing: survey emails go to the test address, not the customer.</span></div>`;
+  }
+  return h + '</div>';
+}
+async function sendSurveyNow() {
+  const r = curRec(); if (!r) return;
+  const b = document.getElementById('sv-btn'); if (b) { b.disabled = true; b.textContent = 'Sending…'; }
+  try {
+    const { data: s } = await sb.auth.getSession();
+    const res = await fetch(SERVER + '/repair-record/send-survey', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (s && s.session ? s.session.access_token : '') }, body: JSON.stringify({ record_id: r.id }) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || 'failed (' + res.status + ')');
+    await loadAll(); await loadEvents(r.id); renderRecord(true); toast('Survey sent to ' + out.to);
+  } catch (e) { toast('Survey not sent: ' + e.message, true); if (b) { b.disabled = false; b.textContent = 'Send survey now'; } }
+}
 function renderReport(r) {
   const miss = reportReady(r);
   if (sendMsg == null) sendMsg = defaultMessage(r);
-  let h = shipBox(r);
+  let h = shipBox(r) + surveyBox(r);
   if (r.report_sent_at) h += `<div class="sentbox">Sent to Freshdesk ticket #${esc(r.freshdesk_ticket)} by ${esc(fullName(r.report_sent_by))} on ${fmtDT(r.report_sent_at)}${r.report_tracking ? ' · with tracking ' + esc(r.report_tracking) : ''}${r.report_file ? ' · ' + esc(r.report_file) : ''}</div>`;
   if (miss.length) h += `<div class="holdbox"><b>Not finished yet: ${esc(miss.join(', '))}</b><span class="note" style="color:var(--warn);">You can preview the report now. It can be sent once every step is done.</span></div>`;
   h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;">
@@ -1599,6 +1665,7 @@ function subscribeLive() {
   sb.channel('rr-live')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_records' }, onLive)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_events' }, onLive)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_surveys' }, onLive)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'repair_tickets' }, onLive)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_standards' }, async () => { await loadStandards(); if (view === 'standards' && !typing()) renderStandards(); })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rr_photos' }, async p => {
