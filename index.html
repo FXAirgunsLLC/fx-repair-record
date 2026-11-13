@@ -6,6 +6,7 @@
 <title>FX Repair Record (test)</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -138,6 +139,33 @@ input.need{border-color:var(--warn);background:var(--warn-soft)}
 .stat b{font-size:26px;line-height:1.1}
 .stdt input{min-width:90px;padding:6px 8px}
 .stdt td{padding:6px 4px}
+/* Install 4: tech's call, QC, Service Report */
+.callrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:4px}
+.opt.pass.on{background:var(--teal);border-color:var(--teal);color:#0f1214}
+.opt.fail.on{background:var(--red);border-color:var(--red);color:#0f1214}
+.qcrow{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.qcrow input{width:20px;height:20px;margin-top:1px;flex:0 0 auto;accent-color:var(--teal)}
+.sentbox{background:var(--teal-dk);border:1px solid #2f5a57;border-radius:8px;padding:12px 14px;color:var(--teal-soft)}
+.repwrap{background:#5a6168;border-radius:8px;padding:18px;overflow:auto;max-height:80vh}
+.rep{background:#fff;color:#1b1f23;width:780px;margin:0 auto;padding:34px 40px;font-family:Inter,Arial,sans-serif;font-size:11.5px;line-height:1.45}
+.rep h3{font-size:13px;margin:16px 0 6px;padding-bottom:4px;border-bottom:2px solid #1b1f23;text-transform:uppercase;letter-spacing:.05em}
+.rep h4{font-size:12px;margin:10px 0 4px}
+.rep table{width:100%;border-collapse:collapse}
+.rep td,.rep th{padding:4px 6px;border-bottom:1px solid #d9dde1;text-align:left;vertical-align:top;color:#1b1f23;font-size:11px}
+.rep th{background:#eef0f2;font-weight:700;color:#3a4148}
+.rep .rhead{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #1b1f23;padding-bottom:10px}
+.rep .rtitle{font-family:'Barlow Condensed',Arial,sans-serif;font-size:28px;font-weight:700;letter-spacing:.04em}
+.rep .kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 24px}
+.rep .kv div{display:flex;gap:8px;padding:3px 0;border-bottom:1px solid #eceef0}
+.rep .kv b{min-width:110px;color:#5a6168;font-weight:600}
+.rep .say{background:#f4f6f7;border-left:3px solid #50c8c0;padding:6px 10px;margin:6px 0}
+.rep .ok{color:#1d7a6f;font-weight:700}.rep .bad{color:#b23b2a;font-weight:700}
+.rep .pics{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.rep .pics img{width:150px;height:112px;object-fit:cover;border-radius:3px;border:1px solid #d9dde1}
+.rep .sig{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:8px}
+.rep .sig div{border-top:1px solid #1b1f23;padding-top:4px}
+.rep .foot{margin-top:18px;padding-top:8px;border-top:1px solid #d9dde1;color:#5a6168;font-size:10px}
+.rep-avoid{page-break-inside:avoid;break-inside:avoid}
 @media(max-width:760px){.grid3{grid-template-columns:1fr}.alab{width:100%}.grid4{grid-template-columns:1fr 1fr}.shots{grid-template-columns:repeat(5,minmax(0,1fr))}.statrow{grid-template-columns:1fr 1fr}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
@@ -170,6 +198,19 @@ const SERVER = 'https://fx-tracking-server.onrender.com';
 const STEPS = ['Received', 'Assessment', 'Quote', 'Repair', 'Testing', 'QC', 'Ready to ship', 'Shipped'];
 const HOLD_REASONS = ['Waiting on customer approval', 'Waiting on parts from Sweden', 'Waiting on payment', 'Needs more diagnosis', 'Shop backlog', 'Other'];
 const CLOCK_DAYS = 14;
+// Velocity standards are off for now: techs make the Pass/Fail call. Set to true to bring them back.
+const STANDARDS_ON = false;
+const PICK_FIELDS = { model: 'model', caliber: 'caliber', barrel_length: 'barrel' };   // page-1 fields with a dropdown
+const QC_CHECKS = [
+  ['leak', 'Holds pressure, no air leaks'],
+  ['function', 'Cocking, loading, trigger and safety all work correctly'],
+  ['tests', 'Velocity results reviewed'],
+  ['fixed', 'The problem the customer reported is fixed'],
+  ['clean', 'Exterior cleaned, no new marks or damage'],
+  ['complete', 'Everything that came in goes back (magazines, accessories)'],
+  ['report', 'Service Report reviewed']
+];
+const FX_LOGO = 'data:image/png;base64,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';
 const FIELDS = [
   ['customer_name', 'Customer'], ['email', 'Email'], ['phone', 'Phone'], ['address', 'Address'],
   ['model', 'Model'], ['serial_number', 'Serial #'], ['caliber', 'Caliber'], ['barrel_length', 'Barrel length'],
@@ -178,7 +219,7 @@ const FIELDS = [
 const DAY = 86400000;
 
 // ── STATE ───────────────────────────────────────────────
-let me = '', tickets = [], records = [], view = 'list', listTab = 'queue', q = '', openRecordId = null, events = [];
+let me = '', tickets = [], records = [], view = 'list', listTab = 'queue', q = '', openRecordId = null, events = [], options = [], otherFor = null;
 
 // ── HELPERS ─────────────────────────────────────────────
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -187,6 +228,7 @@ function fmtDT(iso) { return iso ? new Date(iso).toLocaleString('en-US', { month
 let toastT = null;
 function toast(m, err) { const t = document.getElementById('toast'); t.textContent = m; t.className = 'show' + (err ? ' err' : ''); clearTimeout(toastT); toastT = setTimeout(() => t.className = '', err ? 6000 : 2600); }
 function nameOf(email) { const n = String(email || '').split('@')[0].split('.')[0]; return n ? n.charAt(0).toUpperCase() + n.slice(1) : ''; }
+function fullName(email) { const p = String(email || '').split('@')[0].split(/[._-]+/).filter(Boolean); return p.map(x => x.charAt(0).toUpperCase() + x.slice(1)).join(' '); }
 function dateToIso(d) { return d ? new Date(d + 'T12:00:00').toISOString() : null; }
 function isoToDate(iso) { if (!iso) return ''; const d = new Date(iso); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 // "DRS MkII (.30)" → { model: 'DRS MkII', cal: '.30' }
@@ -212,6 +254,8 @@ async function loadAll() {
   if (a.error) throw a.error;
   if (b.error) throw b.error;
   tickets = a.data || []; records = b.data || [];
+  const o = await sb.from('rr_options').select('*').order('sort', { ascending: true }).order('value', { ascending: true });
+  options = o.error ? [] : (o.data || []);
 }
 async function loadEvents(id) {
   const { data } = await sb.from('rr_events').select('*').eq('record_id', id).order('at', { ascending: false });
@@ -228,7 +272,7 @@ function renderList() {
   const v = document.getElementById('view');
   v.innerHTML = `<div class="bar" style="justify-content:space-between;align-items:flex-end;">
       <div><h1>Repairs</h1><p class="lede">Test version. It reads the Repair Queue but never changes it.</p></div>
-      <div class="bar"><button class="btn" onclick="openStandards()">Test standards</button><button class="btn primary" onclick="openNewTest()">New test repair</button></div></div>
+      <div class="bar">${STANDARDS_ON ? '<button class="btn" onclick="openStandards()">Test standards</button>' : ''}<button class="btn primary" onclick="openNewTest()">New test repair</button></div></div>
     <div class="tabs">
       <button class="tab ${listTab === 'queue' ? 'on' : ''}" onclick="listTab='queue';renderList()">Repair Queue repairs</button>
       <button class="tab ${listTab === 'test' ? 'on' : ''}" onclick="listTab='test';renderList()">Test repairs</button>
@@ -363,7 +407,7 @@ function setPrefillStatus(m) { prefillMsg = m; const el = document.getElementByI
 
 // ── RECORD ──────────────────────────────────────────────
 async function openRecord(id) {
-  openRecordId = id; view = 'record'; prefillMsg = ''; recTab = 'Assessment'; openSecs = new Set();
+  openRecordId = id; view = 'record'; prefillMsg = ''; recTab = 'Assessment'; openSecs = new Set(); sendMsg = null; otherFor = null;
   await Promise.all([loadEvents(id), loadPhotos(id), loadStandards()]);
   renderRecord();
   window.scrollTo(0, 0);
@@ -380,7 +424,7 @@ function renderRecord(keepScroll) {
   let h = `<div class="bar" style="justify-content:space-between;">
       <div><a href="#" onclick="backToList();return false;" style="color:var(--teal);font-size:13px;text-decoration:none;">← Repairs</a>
       <h1>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) + ' · ' : ''}${esc(r.customer_name || 'Unknown customer')}${r.model ? ' · ' + esc(r.model) : ''} ${r.is_test ? '<span class="pill test" style="vertical-align:middle;">TEST</span>' : ''}</h1></div>
-      <div class="bar"><button class="btn" disabled title="Comes in install 4">Preview report</button><button class="btn" disabled title="Comes in install 4">Send Service Report</button></div>
+      <div class="bar">${r.report_sent_at ? `<span class="pill step">Report sent ${fmtDate(r.report_sent_at)}</span>` : ''}<button class="btn" onclick="recTab='Report';renderRecord(true)">Service Report</button></div>
     </div>
     <div class="card" style="margin-top:14px;">
       <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}"><b>${s}</b><span>${st[s] ? fmtDate(st[s]) : (i === si ? 'now' : '')}</span></div>`).join('')}</div>
@@ -398,7 +442,7 @@ function renderRecord(keepScroll) {
     <div class="layout">
       <div class="mainc">
         ${renderTabs(r)}
-        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${recTab === 'Assessment' ? renderAssessment(r) : recTab === 'Work performed' ? renderWork(r) : recTab === 'Testing' ? renderTesting(r) : '<div class="soon">Coming in a later install.</div>'}</div>
+        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${recTab === 'Assessment' ? renderAssessment(r) : recTab === 'Work performed' ? renderWork(r) : recTab === 'Testing' ? renderTesting(r) : recTab === 'QC' ? renderQC(r) : recTab === 'Report' ? renderReport(r) : '<div class="soon">Coming in a later install.</div>'}</div>
         <div class="card"><h2 style="margin-bottom:8px;">History</h2><ul class="hist">${events.length ? events.map(e => `<li>${esc(e.text)}<div class="when">${esc(e.by_email === 'system' ? 'Automatic' : nameOf(e.by_email))}, ${fmtDT(e.at)}</div></li>`).join('') : '<li class="muted">No history yet.</li>'}</ul></div>
       </div>
       <div class="side">
@@ -422,8 +466,32 @@ function fieldHtml(r, k, label) {
   if (k === 'warranty') input = `<select onchange="saveField('${k}', this.value)"><option value="">— Not set —</option><option ${val === 'Yes' ? 'selected' : ''}>Yes</option><option ${val === 'No' ? 'selected' : ''}>No</option></select>`;
   else if (k === 'issue') input = `<textarea onchange="saveField('${k}', this.value)" placeholder="Customer-facing summary of the problem">${esc(val)}</textarea>`;
   else if (k === '__received') input = `<input type="date" value="${esc(val)}" onchange="setReceived(this.value)">`;
+  else if (PICK_FIELDS[k] && otherFor === k) input = `<input id="other-${k}" value="" placeholder="Type the ${esc(label.toLowerCase())}, then press Enter" onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape'){otherFor=null;renderRecord(true);}" onblur="saveOther('${k}', this.value)">`;
+  else if (PICK_FIELDS[k]) {
+    const list = options.filter(o => o.kind === PICK_FIELDS[k]).map(o => o.value);
+    const has = val && list.some(x => x.toLowerCase() === String(val).toLowerCase());
+    input = `<select onchange="pickField('${k}', this.value)"><option value="">— Not set —</option>${val && !has ? `<option selected>${esc(val)}</option>` : ''}${list.map(x => `<option ${String(val).toLowerCase() === x.toLowerCase() ? 'selected' : ''}>${esc(x)}</option>`).join('')}<option value="__other">Other…</option></select>`;
+  }
   else input = `<input value="${esc(val)}" onchange="saveField('${k}', this.value)" placeholder="Not found">`;
   return `<div class="f ${miss ? 'miss' : ''}"><div class="lab"><span>${esc(label)}</span><span class="src">${esc(tag)}</span></div>${input}</div>`;
+}
+function pickField(k, v) {
+  if (v === '__other') { otherFor = k; renderRecord(true); setTimeout(() => { const el = document.getElementById('other-' + k); if (el) el.focus(); }, 0); return; }
+  saveField(k, v);
+}
+async function saveOther(k, v) {
+  if (otherFor !== k) return;
+  otherFor = null;
+  v = String(v || '').trim();
+  if (!v) { renderRecord(true); return; }
+  const kind = PICK_FIELDS[k];
+  if (!options.some(o => o.kind === kind && o.value.toLowerCase() === v.toLowerCase())) {
+    // Add it to the shared list so the next repair can pick it
+    const { data } = await sb.from('rr_options').insert({ kind, value: v, added_by: me }).select().single();
+    if (data) options.push(data);
+  }
+  await saveField(k, v);
+  renderRecord(true);
 }
 async function backToList() { if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); } view = 'list'; openRecordId = null; renderList(); }
 
@@ -563,7 +631,7 @@ function secStatus(r, s) {
 }
 
 function renderTabs(r) {
-  const avail = { 'Assessment': true, 'Work performed': true, 'Testing': true };
+  const avail = { 'Assessment': true, 'Work performed': true, 'Testing': true, 'QC': true, 'Report': true };
   return `<div class="tabs" style="margin-bottom:0;">${['Assessment', 'Work performed', 'Testing', 'QC', 'Report'].map(t =>
     `<button class="tab ${recTab === t ? 'on' : ''}" ${avail[t] ? `onclick="recTab='${t}';renderRecord(true)"` : 'disabled title="Coming in a later install"'}>${t}</button>`).join('')}</div>`;
 }
@@ -835,6 +903,7 @@ function norm(s) { return String(s || '').toLowerCase().replace(/^fx\s+/, '').re
 // ".30", "30", "0.30" → ".30";  "6.35mm" → "6.35"
 function normCal(s) { const m = String(s || '').match(/\d*\.\d+|\d+/); if (!m) return ''; let c = m[0]; if (!c.includes('.')) c = '.' + c; c = c.replace(/^0+\./, '.'); return c; }
 function standardFor(r, pellet) {
+  if (!STANDARDS_ON) return null;
   const model = norm(r.model), cal = normCal(r.caliber);
   const fits = standards.filter(s => { const m = norm(s.model); return m && model && (model.includes(m) || m.includes(model)) && (!s.caliber || !cal || normCal(s.caliber) === cal); });
   if (!fits.length) return null;
@@ -860,7 +929,8 @@ function verdict(st, std) {
   return { pass, label: pass ? 'Pass' : 'Fail: ' + checks.filter(c => !c.ok).map(c => c.k).join(', '), checks };
 }
 function stdText(std) {
-  if (!std) return 'No FX standard for this model and caliber yet. Results are recorded without pass/fail. Add one under Test standards.';
+  if (!STANDARDS_ON) return 'Record the shots, then make the call: Pass or Fail.';
+  if (!std) return 'No FX standard for this model and caliber yet. Make the call yourself: Pass or Fail.';
   const parts = [];
   if (std.fps_min != null || std.fps_max != null) parts.push((std.fps_min ?? '?') + '–' + (std.fps_max ?? '?') + ' fps');
   if (std.es_max != null) parts.push('ES ≤ ' + std.es_max);
@@ -876,9 +946,9 @@ function renderTesting(r) {
   const unassigned = photos.filter(p => p.section === 'Chrono' && !t.strings.some(s => s.photo === p.path));
   if (unassigned.length) h += `<div class="card"><h2>Screenshots from a phone</h2><p class="note">Pick which string each one belongs to. It is read automatically.</p><div class="phs">${unassigned.map(p => `<div style="display:flex;flex-direction:column;gap:6px;"><div class="ph"><img src="${esc(photoUrls[p.path] || '')}" alt="Chrono screenshot"></div>${t.strings.map((s, i) => `<button class="btn sm" onclick="useScreenshot('${p.id}',${i})">Use for string ${i + 1}</button>`).join('')}</div>`).join('')}</div></div>`;
   h += `<div class="card" id="acc">${accuracyInner(r)}</div>`;
-  const ready = t.strings.some(s => stats(s.shots || []));
-  h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Finish testing</b><span class="note">${ready ? 'Ready.' : 'Record at least one velocity string first.'}</span>
-    <div class="bar"><button class="btn primary" id="t-done" ${ready ? '' : 'disabled'} onclick="finishTesting()">Testing done → QC</button></div></div>`;
+  const rd = testsReady(r);
+  h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Finish testing</b><span class="note" id="t-why">${rd.ok ? 'Ready.' : esc(rd.why)}</span>
+    <div class="bar"><button class="btn primary" id="t-done" ${rd.ok ? '' : 'disabled'} onclick="finishTesting()">Testing done → QC</button></div></div>`;
   return h;
 }
 function newString() { return { id: Math.random().toString(36).slice(2, 8), pellet: '', grains: '', reg_bar: '', power: '', shots: [], unsure: [], photo: null }; }
@@ -903,18 +973,36 @@ function stringInner(r, s, i) {
         <div class="shots">${shotIn}</div>
         ${(s.unsure || []).length ? '<span class="note" style="color:var(--warn);">Highlighted shots were hard to read on the screenshot. Please check them.</span>' : ''}
         <div><button class="btn sm ghost" onclick="addShot(${i})">Add a shot</button></div>
-        <div class="statrow" id="stats-${i}">${statsHtml(st, v)}</div></div></div>`;
+        <div class="statrow" id="stats-${i}">${statsHtml(st, v, s)}</div>
+        <div class="callrow" id="call-${i}">${callHtml(i, s, st)}</div></div></div>`;
 }
-function statsHtml(st, v) {
+function statsHtml(st, v, s) {
   if (!st) return '<span class="note">Enter or read the shots to see the results.</span>';
   const cell = (k, val, sub, col) => `<div class="stat"><span class="note">${k}</span><b class="num" style="color:${col || 'var(--text)'}">${val}</b><span class="note">${sub}</span></div>`;
   const good = 'var(--teal-soft)', bad = 'var(--red)';
   const ck = k => !v || v.pass == null ? undefined : (v.checks.find(c => c.k === k) || { ok: true }).ok ? good : bad;
   return cell('Average', st.avg.toFixed(1), 'fps · ' + st.n + ' shots', ck('Average')) + cell('Extreme spread', st.es.toFixed(1).replace(/\.0$/, ''), 'fps', ck('ES')) +
     cell('Std deviation', st.sd.toFixed(1), 'fps', ck('SD')) + cell('Energy', st.fpe == null ? '—' : st.fpe.toFixed(1), st.fpe == null ? 'add pellet weight' : 'ft·lb') +
-    cell('Result', v.pass == null ? '—' : v.pass ? 'Pass' : 'Fail', v.pass == null ? v.label : v.pass ? 'vs FX standard' : v.label.replace('Fail: ', 'out of range: '), v.pass == null ? undefined : v.pass ? good : bad);
+    (v.pass == null
+      ? cell('Result', s && s.result ? s.result : '—', s && s.result ? 'tech’s call' : 'make the call below', s && s.result ? (s.result === 'Pass' ? good : bad) : undefined)
+      : cell('Result', v.pass ? 'Pass' : 'Fail', v.pass ? 'vs FX standard' : v.label.replace('Fail: ', 'out of range: '), v.pass ? good : bad));
 }
-function redrawStats(i) { const r = curRec(), s = testsOf(r).strings[i], el = document.getElementById('stats-' + i); if (!el || !s) return; const std = standardFor(r, s.pellet); const st = stats(s.shots || [], s.grains || (std && std.grains)); el.innerHTML = statsHtml(st, verdict(st, std)); const b = document.getElementById('t-done'); if (b) b.disabled = !testsOf(r).strings.some(x => stats(x.shots || [])); }
+// Tech's call per string (and for accuracy): Pass / Fail
+function callHtml(i, s, st) {
+  if (!st) return '';
+  return `<span class="note">Your call for string ${i + 1}:</span>` + ['Pass', 'Fail'].map(x => `<button type="button" class="opt ${x === 'Pass' ? 'pass' : 'fail'} ${s.result === x ? 'on' : ''}" aria-pressed="${s.result === x}" onclick="setResult(${i},'${x}')">${x}</button>`).join('');
+}
+function setResult(i, x) { const s = testsOf(curRec()).strings[i]; s.result = s.result === x ? null : x; scheduleSave(); redrawStats(i); }
+function testsReady(r) {
+  const t = testsOf(r), done = t.strings.filter(x => stats(x.shots || []));
+  if (!done.length) return { ok: false, why: 'Record at least one velocity string first.' };
+  if (STANDARDS_ON) return { ok: true };
+  if (done.some(x => !x.result)) return { ok: false, why: 'Make the Pass/Fail call on every string with shots.' };
+  if (String(t.accuracy.group_in || '').trim() && !t.accuracy.result) return { ok: false, why: 'Make the Pass/Fail call on the accuracy test.' };
+  return { ok: true };
+}
+function refreshTestDone() { const r = curRec(), b = document.getElementById('t-done'), n = document.getElementById('t-why'); if (!r || !b) return; const k = testsReady(r); b.disabled = !k.ok; if (n) n.textContent = k.ok ? 'Ready.' : k.why; }
+function redrawStats(i) { const r = curRec(), s = testsOf(r).strings[i], el = document.getElementById('stats-' + i); if (!el || !s) return; const std = standardFor(r, s.pellet); const st = stats(s.shots || [], s.grains || (std && std.grains)); el.innerHTML = statsHtml(st, verdict(st, std), s); const c = document.getElementById('call-' + i); if (c) c.innerHTML = callHtml(i, s, st); refreshTestDone(); }
 function redrawString(i) { const r = curRec(), el = document.getElementById('str-' + i); if (el) el.innerHTML = stringInner(r, testsOf(r).strings[i], i); redrawStats(i); }
 function setShot(i, k, val) { const s = testsOf(curRec()).strings[i]; s.shots = s.shots || []; s.shots[k] = String(val).trim() === '' ? null : String(val).trim(); while (s.shots.length && (s.shots[s.shots.length - 1] == null)) s.shots.pop(); s.unsure = (s.unsure || []).filter(x => x !== k); scheduleSave(); redrawStats(i); }
 function setStr(i, key, val, stdAffects) { const s = testsOf(curRec()).strings[i]; s[key] = val; scheduleSave(); if (stdAffects) redrawStats(i); }
@@ -963,7 +1051,8 @@ async function readInto(i, dataUrl) {
 function accuracyInner(r) {
   const a = testsOf(r).accuracy, std = standardFor(r, (testsOf(r).strings[0] || {}).pellet);
   const g = Number(a.group_in), lim = std && std.acc_group_in != null ? Number(std.acc_group_in) : null;
-  const res = a.group_in && lim != null ? (g <= lim ? '<b style="color:var(--teal-soft)">Within FX standard</b>' : '<b style="color:var(--red)">Outside FX standard</b>') : a.group_in ? '<span class="note">No accuracy standard yet</span>' : '';
+  const res = a.group_in && lim != null ? (g <= lim ? '<b style="color:var(--teal-soft)">Within FX standard</b>' : '<b style="color:var(--red)">Outside FX standard</b>')
+    : a.group_in ? ['Pass', 'Fail'].map(x => `<button type="button" class="opt ${x === 'Pass' ? 'pass' : 'fail'} ${a.result === x ? 'on' : ''}" onclick="setAccResult('${x}')">${x}</button>`).join(' ') : '';
   return `<h2>Accuracy test <span class="note" style="font-weight:400;">${std && std.acc_group_in != null ? 'FX standard: ' + esc(std.acc_group_in) + ' in at ' + esc(std.acc_distance_yd ?? '?') + ' yd' : '(optional)'}</span></h2>
     <div class="grid4" style="margin-top:8px;">
       <label class="l">Distance (yd)<input inputmode="decimal" value="${esc(a.distance_yd || '')}" oninput="setAcc('distance_yd',this.value)"></label>
@@ -972,13 +1061,215 @@ function accuracyInner(r) {
       <div class="l">Result<div id="acc-res" style="padding-top:8px;">${res}</div></div></div>
     ${photoBlock('Target', 'Target photo')}`;
 }
-function setAcc(k, v) { const r = curRec(); testsOf(r).accuracy[k] = v; scheduleSave(); if (k === 'group_in') { const el = document.getElementById('acc'); const y = window.scrollY; if (el) { const f = document.activeElement && document.activeElement.getAttribute('oninput'); el.innerHTML = accuracyInner(r); const again = f && el.querySelector(`[oninput="${f}"]`); if (again) { again.focus(); const L = again.value.length; try { again.setSelectionRange(L, L); } catch (e) {} } window.scrollTo(0, y); } } }
+function setAccResult(x) { const r = curRec(), a = testsOf(r).accuracy; a.result = a.result === x ? null : x; scheduleSave(); const el = document.getElementById('acc'); if (el) el.innerHTML = accuracyInner(r); refreshTestDone(); }
+function setAcc(k, v) { const r = curRec(); testsOf(r).accuracy[k] = v; scheduleSave(); if (k === 'group_in') { const el = document.getElementById('acc'); const y = window.scrollY; if (el) { const f = document.activeElement && document.activeElement.getAttribute('oninput'); el.innerHTML = accuracyInner(r); refreshTestDone(); const again = f && el.querySelector(`[oninput="${f}"]`); if (again) { again.focus(); const L = again.value.length; try { again.setSelectionRange(L, L); } catch (e) {} } window.scrollTo(0, y); } } }
 async function finishTesting() {
   const r = curRec(); if (!r) return;
+  const k = testsReady(r); if (!k.ok) return toast(k.why, true);
   if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
   const patch = { tested_by: me, tested_at: new Date().toISOString() };
   if (Math.max(0, STEPS.indexOf(r.step)) < STEPS.indexOf('QC')) { const st = Object.assign({}, r.step_times || {}); st.Testing = st.Testing || patch.tested_at; st.QC = patch.tested_at; patch.step = 'QC'; patch.step_times = st; }
   if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Testing done' + (patch.step ? ', moved to QC' : '')); await loadEvents(r.id); renderRecord(true); toast('Testing marked done'); }
+}
+
+// ── QC ──────────────────────────────────────────────────
+function qcOf(r) { if (!r.qc || typeof r.qc !== 'object') r.qc = {}; if (!r.qc.checks) r.qc.checks = {}; return r.qc; }
+function renderQC(r) {
+  const q = qcOf(r), all = QC_CHECKS.every(([k]) => q.checks[k]);
+  const before = STEPS.indexOf(r.step) < STEPS.indexOf('QC');
+  const same = r.repaired_by && r.repaired_by === me;
+  let h = `<div class="bar" style="justify-content:space-between;"><span>${r.qc_at ? `QC passed by <b>${esc(fullName(r.qc_by))}</b> on ${fmtDate(r.qc_at)}` : 'Final check before the rifle goes back. Internal only: none of this goes on the report except who signed off.'}</span><span class="note" id="as-status">Saves automatically</span></div>`;
+  if (before) h += `<div class="holdbox"><b>Testing isn’t finished yet.</b><span class="note" style="color:var(--warn);">You can look through the checklist, but QC can only be signed off once the record reaches QC.</span></div>`;
+  h += `<div class="card"><h2 style="margin-bottom:4px;">Checklist</h2>` + QC_CHECKS.map(([k, label]) =>
+    `<label class="qcrow"><input type="checkbox" ${q.checks[k] ? 'checked' : ''} onchange="setQc('${k}', this.checked)"><span>${esc(label)}</span></label>`).join('') +
+    `<label class="l" style="margin-top:12px;">QC notes (internal)<textarea oninput="setQcNote(this.value)" placeholder="Anything worth noting">${esc(q.notes || '')}</textarea></label></div>`;
+  h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Sign off</b>
+    ${same ? `<span class="note" style="color:var(--warn);">You also did the repair. Ideally someone else does QC.</span>` : ''}
+    <span class="note" id="qc-why">${all ? 'All checks done.' : 'Tick every check to pass QC.'}</span>
+    <div class="bar"><button class="btn primary" id="qc-pass" ${all && !before ? '' : 'disabled'} onclick="passQc()">QC passed → Ready to ship</button>
+    <button class="btn" ${before ? 'disabled' : ''} onclick="failQc()">QC failed → back to Repair</button></div></div>`;
+  return h;
+}
+function setQc(k, on) {
+  const r = curRec(), q = qcOf(r); q.checks[k] = !!on; saveQcSoon();
+  const all = QC_CHECKS.every(([x]) => q.checks[x]), b = document.getElementById('qc-pass'), n = document.getElementById('qc-why');
+  if (b) b.disabled = !all || STEPS.indexOf(r.step) < STEPS.indexOf('QC');
+  if (n) n.textContent = all ? 'All checks done.' : 'Tick every check to pass QC.';
+}
+function setQcNote(v) { qcOf(curRec()).notes = v; saveQcSoon(); }
+let qcTimer = null;
+function saveQcSoon() { const st = document.getElementById('as-status'); if (st) st.textContent = 'Saving…'; clearTimeout(qcTimer); qcTimer = setTimeout(saveQc, 600); }
+async function saveQc() {
+  qcTimer = null; const r = curRec(); if (!r) return;
+  const { error } = await sb.from('rr_records').update({ qc: r.qc || {} }).eq('id', r.id);
+  const st = document.getElementById('as-status'); if (st) st.textContent = error ? 'Not saved' : 'Saved';
+  if (error) toast('Could not save: ' + error.message, true);
+}
+async function passQc() {
+  const r = curRec(); if (!r) return;
+  if (qcTimer) { clearTimeout(qcTimer); await saveQc(); }
+  if (!QC_CHECKS.every(([k]) => qcOf(r).checks[k])) return toast('Tick every check first.', true);
+  const now = new Date().toISOString();
+  const patch = { qc_by: me, qc_at: now, qc: r.qc };
+  if (STEPS.indexOf(r.step) < STEPS.indexOf('Ready to ship')) { const st = Object.assign({}, r.step_times || {}); st.QC = st.QC || now; st['Ready to ship'] = now; patch.step = 'Ready to ship'; patch.step_times = st; }
+  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'QC passed' + (patch.step ? ', moved to Ready to ship' : '')); await loadEvents(r.id); recTab = 'Report'; renderRecord(true); toast('QC passed. The Service Report is ready.'); }
+}
+function failQc() {
+  document.getElementById('modal-body').innerHTML = `<h2>QC failed</h2>
+    <p class="note">The record goes back to Repair. Say what needs fixing; it’s saved in the history.</p>
+    <label class="l">What failed<textarea id="qcf-why"></textarea></label>
+    <div class="bar"><button class="btn primary" onclick="saveFailQc()">Send back to Repair</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
+  document.getElementById('modal').classList.add('open');
+  setTimeout(() => document.getElementById('qcf-why').focus(), 30);
+}
+async function saveFailQc() {
+  const why = document.getElementById('qcf-why').value.trim();
+  if (!why) return toast('Say what failed.', true);
+  closeModal();
+  const r = curRec(); if (!r) return;
+  const q = qcOf(r); q.checks = {}; q.notes = (q.notes ? q.notes + '\n' : '') + 'QC failed ' + fmtDate(new Date().toISOString()) + ': ' + why;
+  const patch = { step: 'Repair', qc: q, qc_by: null, qc_at: null, repaired_at: null, repaired_by: null, tested_at: null, tested_by: null };
+  if (await patchRecord(patch)) { await logEvent(r.id, 'qc', 'QC failed, back to Repair: ' + why); await loadEvents(r.id); recTab = 'Work performed'; renderRecord(true); toast('Sent back to Repair'); }
+}
+
+// ── SERVICE REPORT ──────────────────────────────────────
+let sendMsg = null;           // message being edited for the Freshdesk reply
+function reportReady(r) {
+  const miss = [];
+  if (!r.assessed_at) miss.push('assessment');
+  if (!r.repaired_at) miss.push('work performed');
+  if (!r.tested_at) miss.push('testing');
+  if (!r.qc_at) miss.push('QC');
+  return miss;
+}
+function rowText(d, row) {
+  const [key, , , kind, extra] = row, v = d.v[key];
+  if (kind === 'multi') return Array.isArray(v) && v.length ? v.join(', ') : '—';
+  if (!v) return '—';
+  if (extra && v === 'Reading') return (d.v[extra] ? d.v[extra] + ' bar' : 'Reading');
+  return v;
+}
+function goodWord(v) { return /^(Good|Intact|Secure|Pass|No leak detected|None observed|Complete|No issues observed|Factory original)$/i.test(v); }
+function badWord(v) { return /(Damage|Fail|Leak detected|Missing|Loose|Abnormal|Issue|Safety hold|Contamination|Modified)/i.test(v); }
+function repPics(sec) {
+  const list = photos.filter(p => p.section === sec && photoUrls[p.path]).slice(0, 4);
+  return list.length ? `<div class="pics">${list.map(p => `<img src="${esc(photoUrls[p.path])}" crossorigin="anonymous" alt="">`).join('')}</div>` : '';
+}
+function reportHtml(r) {
+  const a = asOf(r), w = workOf(r), t = testsOf(r);
+  const today = new Date().toISOString();
+  const warr = r.warranty === 'Yes' ? 'Under warranty' : r.warranty === 'No' ? 'Not under warranty' : '—';
+  const kv = (k, v) => `<div><b>${esc(k)}</b><span>${esc(v || '—')}</span></div>`;
+  let h = `<div class="rep" id="rep">
+    <div class="rhead"><img src="${FX_LOGO}" alt="FX Airguns" style="height:34px;"><div style="text-align:right;"><div class="rtitle">SERVICE REPORT</div>
+      <div>${r.freshdesk_ticket ? 'Ticket #' + esc(r.freshdesk_ticket) + ' · ' : ''}${fmtDate(r.qc_at || today)}</div></div></div>
+    <h3>Customer &amp; rifle</h3>
+    <div class="kv">${kv('Customer', r.customer_name)}${kv('Model', r.model ? (/^fx\b/i.test(r.model) ? r.model : 'FX ' + r.model) : '')}${kv('Email', r.email)}${kv('Serial #', r.serial_number)}${kv('Phone', r.phone)}${kv('Caliber', r.caliber)}${kv('Received', fmtDate(r.received_at))}${kv('Barrel length', r.barrel_length)}${kv('Completed', fmtDate(r.qc_at || today))}${kv('Warranty', warr)}</div>`;
+  if (r.issue) h += `<h3>What you told us</h3><div class="say">${esc(r.issue)}</div>`;
+  // As-received assessment: every row (customer sections only)
+  h += `<h3>Assessment as received</h3><p style="margin:0 0 6px;color:#5a6168;">Recorded when the rifle arrived, before any adjustment, cleaning or repair.</p>`;
+  SECTIONS.filter(s => !s.internal).forEach(s => {
+    const d = a[s.id] || { v: {} }; d.v = d.v || {};
+    let rows = s.rows.map(row => { const val = rowText(d, row); return `<tr><td style="width:46%;">${esc(row[1])}</td><td class="${goodWord(val) ? 'ok' : badWord(val) ? 'bad' : ''}">${esc(val)}</td></tr>`; }).join('');
+    if (s.id === 'C' && d.v.leak === 'Leak detected') [1, 2, 3].forEach(n => { if (String(d.v['leak' + n] || '').trim()) rows += `<tr><td>Leak ${n} location</td><td>${esc(d.v['leak' + n])}</td></tr>`; });
+    if (s.id === 'D' && d.v.abnormal) rows += `<tr><td>Details</td><td>${esc(d.v.abnormal)}</td></tr>`;
+    if (s.id === 'F' && d.v.measurements) rows += `<tr><td>Measurements</td><td>${esc(d.v.measurements)}</td></tr>`;
+    h += `<div class="rep-avoid"><h4>${s.id} · ${esc(s.title)}</h4><table>${rows}</table>${String(d.text || '').trim() ? `<div class="say">${esc(d.text)}</div>` : ''}${repPics(s.id)}</div>`;
+  });
+  // Work performed
+  h += `<div class="rep-avoid"><h3>Work performed</h3><div class="say">${esc(String(w.text || '').trim() || String(w.raw || '').trim() || '—')}</div>`;
+  const parts = (w.parts || []).filter(p => String(p.desc || p.pn || '').trim());
+  if (parts.length) h += `<table><tr><th style="width:60px;">Qty</th><th>Part</th><th style="width:150px;">Part #</th></tr>${parts.map(p => `<tr><td>${esc(p.qty || 1)}</td><td>${esc(p.desc)}</td><td>${esc(p.pn)}</td></tr>`).join('')}</table>`;
+  h += `${repPics('W')}</div>`;
+  // Test results
+  const strs = t.strings.map(s => ({ s, st: stats(s.shots || [], s.grains) })).filter(x => x.st);
+  h += `<div class="rep-avoid"><h3>Test results</h3>`;
+  if (strs.length) h += `<table><tr><th>String</th><th>Pellet</th><th>Weight</th><th>Regulator</th><th>Shots</th><th>Average</th><th>ES</th><th>SD</th><th>Energy</th><th>Result</th></tr>` +
+    strs.map(({ s, st }, i) => `<tr><td>${i + 1}</td><td>${esc(s.pellet || '—')}</td><td>${s.grains ? esc(s.grains) + ' gr' : '—'}</td><td>${s.reg_bar ? esc(s.reg_bar) + ' bar' : '—'}</td><td>${st.n}</td><td>${st.avg.toFixed(1)} fps</td><td>${st.es.toFixed(1).replace(/\.0$/, '')}</td><td>${st.sd.toFixed(1)}</td><td>${st.fpe == null ? '—' : st.fpe.toFixed(1) + ' ft·lb'}</td><td class="${s.result === 'Pass' ? 'ok' : s.result === 'Fail' ? 'bad' : ''}">${esc(s.result || '—')}</td></tr>`).join('') + '</table>';
+  else h += '<p>No velocity test recorded.</p>';
+  const acc = t.accuracy || {};
+  if (String(acc.group_in || '').trim()) {
+    const how = [acc.shots ? esc(acc.shots) + ' shots' : '', acc.distance_yd ? 'at ' + esc(acc.distance_yd) + ' yd' : ''].filter(Boolean).join(' ');
+    h += `<p style="margin-top:6px;"><b>Accuracy:</b> ${how ? how + ', ' : ''}group ${esc(acc.group_in)} in (center to center)${acc.result ? ` · <span class="${acc.result === 'Pass' ? 'ok' : 'bad'}">${esc(acc.result)}</span>` : ''}</p>`;
+  }
+  h += `${repPics('Target')}</div>`;
+  // Sign-off
+  h += `<div class="rep-avoid"><h3>Sign-off</h3><div class="sig">
+    <div><b>Assessed by</b><br>${esc(fullName(r.assessed_by) || '—')}<br>${fmtDate(r.assessed_at)}</div>
+    <div><b>Repaired by</b><br>${esc(fullName(r.repaired_by) || '—')}<br>${fmtDate(r.repaired_at)}</div>
+    <div><b>Tested by</b><br>${esc(fullName(r.tested_by) || '—')}<br>${fmtDate(r.tested_at)}</div>
+    <div><b>QC by</b><br>${esc(fullName(r.qc_by) || '—')}<br>${fmtDate(r.qc_at)}</div></div>
+    <div class="foot">FX Airguns · Questions about this report? Reply to your support ticket${r.freshdesk_ticket ? ' #' + esc(r.freshdesk_ticket) : ''} and our team will help.</div></div>`;
+  return h + '</div>';
+}
+function defaultMessage(r) {
+  const first = String(r.customer_name || '').trim().split(/\s+/)[0] || 'there';
+  const model = r.model ? (/^fx\b/i.test(r.model) ? r.model : 'FX ' + r.model) : 'rifle';
+  return `Hi ${first},\n\nThe repair on your ${model}${r.serial_number ? ' (serial ' + r.serial_number + ')' : ''} is complete and it has passed our final quality check.\n\nYour Service Report is attached. It shows what we found when the rifle arrived, the work we did, and the test results.\n\nWe'll send you the tracking number as soon as it ships.\n\nThank you for your patience,\nFX Airguns Service Team`;
+}
+function renderReport(r) {
+  const miss = reportReady(r);
+  if (sendMsg == null) sendMsg = defaultMessage(r);
+  let h = '';
+  if (r.report_sent_at) h += `<div class="sentbox">Sent to Freshdesk ticket #${esc(r.freshdesk_ticket)} by ${esc(fullName(r.report_sent_by))} on ${fmtDT(r.report_sent_at)}${r.report_file ? ' · ' + esc(r.report_file) : ''}</div>`;
+  if (miss.length) h += `<div class="holdbox"><b>Not finished yet: ${esc(miss.join(', '))}</b><span class="note" style="color:var(--warn);">You can preview the report now. It can be sent once every step is done.</span></div>`;
+  h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;">
+      <div class="bar" style="justify-content:space-between;"><h2>Send to the customer</h2><button class="btn sm" onclick="downloadReport()">Download PDF</button></div>
+      <label class="l">Message (goes in the Freshdesk reply, with the PDF attached)<textarea id="send-msg" rows="9" oninput="sendMsg=this.value">${esc(sendMsg)}</textarea></label>
+      <div class="bar"><button class="btn primary" id="send-btn" ${miss.length || !r.freshdesk_ticket ? 'disabled' : ''} onclick="sendReport()">${r.report_sent_at ? 'Send again' : 'Send'} to Freshdesk ticket #${esc(r.freshdesk_ticket || '?')}</button>
+      <button class="btn sm ghost" onclick="sendMsg=null;renderRecord(true)">Reset message</button><span class="note" id="send-note">${!r.freshdesk_ticket ? 'Add the Freshdesk # on page 1 first.' : 'Testing: only works on a ticket listed as a test ticket on the server.'}</span></div></div>
+    <div class="card"><h2 style="margin-bottom:10px;">Preview</h2><div class="repwrap">${reportHtml(r)}</div></div>`;
+  return h;
+}
+function reportFileName(r) {
+  const clean = x => String(x || '').replace(/[\\/:*?"<>|#%]/g, '').replace(/\s+/g, ' ').trim();
+  return clean(`Service Report - ${r.freshdesk_ticket ? '#' + r.freshdesk_ticket + ' - ' : ''}${r.customer_name || 'Customer'}`) + '.pdf';
+}
+async function makePdf(r, mode) {
+  if (!window.html2pdf) throw new Error('The PDF tool did not load. Refresh the page and try again.');
+  await loadPhotos(r.id);                     // fresh photo links
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;left:-10000px;top:0;';
+  box.innerHTML = reportHtml(r);
+  document.body.appendChild(box);
+  try {
+    const worker = html2pdf().set({
+      margin: [8, 8, 10, 8], filename: reportFileName(r),
+      image: { type: 'jpeg', quality: 0.86 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'], avoid: ['.rep-avoid', 'tr'] }
+    }).from(box.firstElementChild);
+    if (mode === 'save') { await worker.save(); return null; }
+    return await worker.outputPdf('datauristring');
+  } finally { box.remove(); }
+}
+async function downloadReport() {
+  const r = curRec(); if (!r) return;
+  toast('Making the PDF…');
+  try { await makePdf(r, 'save'); } catch (e) { toast('Could not make the PDF: ' + e.message, true); }
+}
+async function sendReport() {
+  const r = curRec(); if (!r) return;
+  const miss = reportReady(r); if (miss.length) return toast('Not finished yet: ' + miss.join(', '), true);
+  const msg = String(sendMsg || '').trim(); if (!msg) return toast('Write a message first.', true);
+  if (!confirm(`Send the Service Report to Freshdesk ticket #${r.freshdesk_ticket}?\n\nThe customer on that ticket gets this reply with the PDF attached.`)) return;
+  const btn = document.getElementById('send-btn'), note = document.getElementById('send-note');
+  btn.disabled = true; note.textContent = 'Making the PDF…';
+  try {
+    const uri = await makePdf(r, 'data');
+    note.textContent = 'Sending to Freshdesk…';
+    const { data: s } = await sb.auth.getSession();
+    const res = await fetch(SERVER + '/repair-record/send-report', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (s && s.session ? s.session.access_token : '') },
+      body: JSON.stringify({ record_id: r.id, message: msg, filename: reportFileName(r), pdf_base64: String(uri).split(',')[1] }) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || 'failed (' + res.status + ')');
+    const { data } = await sb.from('rr_records').select('*').eq('id', r.id).single();
+    if (data) Object.assign(r, data);
+    await loadEvents(r.id); sendMsg = null; renderRecord(true); toast('Sent to Freshdesk #' + r.freshdesk_ticket);
+  } catch (e) {
+    note.textContent = 'Not sent: ' + e.message; btn.disabled = false; toast('Not sent: ' + e.message, true);
+  }
 }
 
 // ── TEST STANDARDS PAGE ─────────────────────────────────
@@ -1023,7 +1314,7 @@ function subscribeLive() {
 function onLive() { clearTimeout(liveT); liveT = setTimeout(liveApply, 800); }
 async function liveApply() {
   if (view === 'phone' || view === 'standards') return;
-  if (typing() || saveTimer || saving || document.getElementById('modal').classList.contains('open')) { liveT = setTimeout(liveApply, 1500); return; }
+  if (typing() || saveTimer || qcTimer || saving || document.getElementById('modal').classList.contains('open')) { liveT = setTimeout(liveApply, 1500); return; }
   try { await loadAll(); if (openRecordId) await loadEvents(openRecordId); } catch (e) { return; }
   if (view === 'record') renderRecord(true); else renderRows();
 }
