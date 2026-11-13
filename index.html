@@ -7,6 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -140,6 +141,13 @@ input.need{border-color:var(--warn);background:var(--warn-soft)}
 .stdt input{min-width:90px;padding:6px 8px}
 .stdt td{padding:6px 4px}
 /* Install 4: tech's call, QC, Service Report */
+.tab .here{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--teal);margin-left:6px;vertical-align:middle}
+#sugg{position:absolute;z-index:80;background:var(--raised);border:1px solid var(--line2);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.45);max-height:300px;overflow-y:auto;display:none;min-width:320px}
+#sugg.open{display:block}
+#sugg button{display:flex;gap:10px;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--line);padding:8px 12px;color:var(--text);font-size:13px}
+#sugg button:last-child{border-bottom:0}
+#sugg button.on,#sugg button:hover{background:var(--teal-dk)}
+#sugg .pn{font-family:'Barlow Condensed',sans-serif;font-weight:700;color:var(--teal-soft);min-width:96px}
 .callrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:4px}
 .opt.pass.on{background:var(--teal);border-color:var(--teal);color:#0f1214}
 .opt.fail.on{background:var(--red);border-color:var(--red);color:#0f1214}
@@ -188,6 +196,7 @@ input.need{border-color:var(--warn);background:var(--warn-soft)}
 
 <div class="modal-wrap" id="modal"><div class="modal" id="modal-body"></div></div>
 <div id="toast"></div>
+<div id="sugg" role="listbox"></div>
 
 <script>
 // ── CONFIG ──────────────────────────────────────────────
@@ -200,6 +209,10 @@ const HOLD_REASONS = ['Waiting on customer approval', 'Waiting on parts from Swe
 const CLOCK_DAYS = 14;
 // Velocity standards are off for now: techs make the Pass/Fail call. Set to true to bring them back.
 const STANDARDS_ON = false;
+// The tab always follows the step
+const STEP_TAB = { 'Received': 'Assessment', 'Assessment': 'Assessment', 'Quote': 'Assessment', 'Repair': 'Work performed', 'Testing': 'Testing', 'QC': 'QC', 'Ready to ship': 'Report', 'Shipped': 'Report' };
+// Steps that move on only with the "done" button inside their tab (so who/when is recorded)
+const DONE_IN_TAB = { 'Assessment': 'Finish it with the button at the bottom of the Assessment tab.', 'Repair': 'Mark the repair done at the bottom of Work performed.', 'Testing': 'Finish it at the bottom of the Testing tab.', 'QC': 'Sign off at the bottom of the QC tab.' };
 const PICK_FIELDS = { model: 'model', caliber: 'caliber', barrel_length: 'barrel' };   // page-1 fields with a dropdown
 const QC_CHECKS = [
   ['leak', 'Holds pressure, no air leaks'],
@@ -219,6 +232,7 @@ const FIELDS = [
 const DAY = 86400000;
 
 // ── STATE ───────────────────────────────────────────────
+let parts = [], partsByPn = {}, partsLoaded = false;
 let me = '', tickets = [], records = [], view = 'list', listTab = 'queue', q = '', openRecordId = null, events = [], options = [], otherFor = null;
 
 // ── HELPERS ─────────────────────────────────────────────
@@ -280,6 +294,19 @@ async function loadAll() {
   tickets = a.data || []; records = b.data || [];
   const o = await sb.from('rr_options').select('*').order('sort', { ascending: true }).order('value', { ascending: true });
   options = o.error ? [] : (o.data || []);
+  if (!partsLoaded) loadParts();
+}
+async function loadParts() {
+  const all = [];
+  for (let from = 0; from < 20000; from += 1000) {
+    const { data, error } = await sb.from('rr_parts').select('part_number,name').order('part_number').range(from, from + 999);
+    if (error || !data) break;
+    all.push(...data);
+    if (data.length < 1000) break;
+  }
+  parts = all.map(p => ({ pn: p.part_number, name: p.name, key: normKey(p.part_number + ' ' + p.name) }));
+  partsByPn = {}; parts.forEach(p => { partsByPn[p.pn.toLowerCase()] = p; });
+  partsLoaded = true;
 }
 async function loadEvents(id) {
   const { data } = await sb.from('rr_events').select('*').eq('record_id', id).order('at', { ascending: false });
@@ -439,7 +466,7 @@ function setPrefillStatus(m) { prefillMsg = m; const el = document.getElementByI
 
 // ── RECORD ──────────────────────────────────────────────
 async function openRecord(id) {
-  openRecordId = id; view = 'record'; prefillMsg = ''; recTab = 'Assessment'; openSecs = new Set(); sendMsg = null; otherFor = null;
+  openRecordId = id; view = 'record'; prefillMsg = ''; recTab = STEP_TAB[(records.find(x => x.id === id) || {}).step] || 'Assessment'; openSecs = new Set(); sendMsg = null; otherFor = null;
   await Promise.all([loadEvents(id), loadPhotos(id), loadStandards()]);
   renderRecord();
   window.scrollTo(0, 0);
@@ -465,8 +492,9 @@ function renderRecord(keepScroll) {
         : `<div class="clock"><span class="muted">The 14-day clock starts when the rifle is received.</span><input type="date" id="rec-date" value="${isoToDate(new Date().toISOString())}" style="width:auto;"><button class="btn sm" onclick="setReceived()">Mark received</button></div>`}
       <div class="bar" style="margin-top:12px;">
         ${si > 0 ? `<button class="btn sm ghost" onclick="moveStep(-1)">← Back to ${esc(STEPS[si - 1])}</button>` : ''}
-        ${next ? `<button class="btn sm primary" onclick="moveStep(1)" ${!r.received_at ? 'disabled title="Mark it received first"' : ''}>Move to ${esc(next)} →</button>` : ''}
-        ${r.step === 'Assessment' ? `<button class="btn sm" onclick="skipQuote()">Skip quote (warranty) → Repair</button>` : ''}
+        ${next ? (DONE_IN_TAB[r.step]
+          ? `<button class="btn sm primary" onclick="goTab('${STEP_TAB[r.step]}')">Go to ${esc(STEP_TAB[r.step])} →</button><span class="note">${esc(DONE_IN_TAB[r.step])}</span>`
+          : `<button class="btn sm primary" onclick="moveStep(1)" ${!r.received_at ? 'disabled title="Mark it received first"' : ''}>Move to ${esc(next)} →</button>`) : ''}
         ${!r.hold_reason ? `<button class="btn sm" onclick="openHold()">Put on hold</button>` : ''}
       </div>
       ${r.hold_reason ? `<div class="holdbox" style="margin-top:12px;"><b>On hold: ${esc(r.hold_reason)}</b><span class="note" style="color:var(--warn);">Since ${fmtDT(r.hold_since)}. The 14-day clock keeps running.</span><div><button class="btn sm" onclick="resumeHold()">Resume work</button></div></div>` : ''}
@@ -571,11 +599,13 @@ async function moveStep(dir, to) {
   if (dir > 0 || to) st[target] = new Date().toISOString();
   if (await patchRecord({ step: target, step_times: st })) {
     await logEvent(r.id, 'step', (dir < 0 ? 'Moved back to ' : 'Moved to ') + target);
+    recTab = STEP_TAB[target] || recTab;
     await loadEvents(r.id); renderRecord(true);
     toast('Now at ' + target);
   }
 }
 function skipQuote() { moveStep(1, 'Repair'); }
+function goTab(t) { recTab = t; renderRecord(true); const el = document.getElementById('tabbody'); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 function openHold() {
   document.getElementById('modal-body').innerHTML = `<h2>Put on hold</h2>
     <p class="note">The 14-day clock keeps running. The reason is recorded so management can see what held it up.</p>
@@ -668,7 +698,7 @@ function secStatus(r, s) {
 function renderTabs(r) {
   const avail = { 'Assessment': true, 'Work performed': true, 'Testing': true, 'QC': true, 'Report': true };
   return `<div class="tabs" style="margin-bottom:0;">${['Assessment', 'Work performed', 'Testing', 'QC', 'Report'].map(t =>
-    `<button class="tab ${recTab === t ? 'on' : ''}" ${avail[t] ? `onclick="recTab='${t}';renderRecord(true)"` : 'disabled title="Coming in a later install"'}>${t}</button>`).join('')}</div>`;
+    `<button class="tab ${recTab === t ? 'on' : ''}" ${avail[t] ? `onclick="recTab='${t}';renderRecord(true)"` : 'disabled title="Coming in a later install"'}>${t}${STEP_TAB[r.step] === t ? '<span class="here" title="Current step"></span>' : ''}</button>`).join('')}</div>`;
 }
 function renderAssessment(r) {
   const done = CUSTOMER_SECS.filter(id => secStatus(r, SECTIONS.find(s => s.id === id)) === 'done').length;
@@ -729,8 +759,7 @@ function secInner(r, s) {
 }
 function partRow(p, i) {
   return `<div class="prow"><input type="number" min="1" value="${esc(p.qty || 1)}" oninput="setPart(${i},'qty',this.value)" aria-label="Quantity" style="max-width:80px;">
-    <input value="${esc(p.desc || '')}" placeholder="Part / component" oninput="setPart(${i},'desc',this.value)" aria-label="Part description">
-    <input value="${esc(p.pn || '')}" placeholder="Part # (if known)" oninput="setPart(${i},'pn',this.value)" aria-label="Part number" style="max-width:180px;">
+    ${partInputs('H', p, i)}
     <button class="btn sm ghost" onclick="removePart(${i})" aria-label="Remove part">Remove</button></div>`;
 }
 function curRec() { return records.find(x => x.id === openRecordId); }
@@ -770,7 +799,8 @@ async function finishAssessment(next) {
   if (si < STEPS.indexOf(next)) { const st = Object.assign({}, r.step_times || {}); st.Assessment = st.Assessment || patch.assessed_at; st[next] = patch.assessed_at; patch.step = next; patch.step_times = st; }
   if (await patchRecord(patch)) {
     await logEvent(r.id, 'step', 'Assessment finished' + (patch.step ? ', moved to ' + next : ''));
-    await loadEvents(r.id); renderRecord(true); toast('Assessment finished');
+    recTab = STEP_TAB[r.step] || recTab;
+    await loadEvents(r.id); renderRecord(true); window.scrollTo(0, 0); toast('Assessment finished');
   }
 }
 async function rewrite(id) {
@@ -876,6 +906,68 @@ async function renderPhone() {
     <p class="note">Photos go straight onto the repair card on the computer. You can close this page when you’re done.</p></div>`;
 }
 
+// ── PART LOOKUP ─────────────────────────────────────────
+// Part # fills the description; typing letters in either box suggests matches.
+function normKey(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9.]+/g, ''); }
+function findParts(q, field) {
+  const words = String(q || '').toLowerCase().split(/\s+/).map(normKey).filter(Boolean);
+  if (!words.length) return [];
+  const out = [];
+  for (const p of parts) {
+    const pnk = normKey(p.pn);
+    const hit = field === 'pn' ? pnk.startsWith(words.join('')) : words.every(w => p.key.includes(w));
+    if (hit) { out.push(p); if (out.length >= 8) break; }
+  }
+  return out;
+}
+let sugg = { list: null, i: -1, field: '', items: [], at: -1, el: null };
+function partList(which) { const r = curRec(); return which === 'H' ? (secData(r, 'H').v.parts = Array.isArray(secData(r, 'H').v.parts) ? secData(r, 'H').v.parts : []) : workOf(r).parts; }
+function partInput(which, i, field, el) {
+  const p = partList(which)[i]; if (!p) return;
+  p[field] = el.value; scheduleSave();
+  // An exact part # fills the description (unless someone typed their own)
+  if (field === 'pn') {
+    const hit = partsByPn[String(el.value || '').trim().toLowerCase()];
+    if (hit && (!String(p.desc || '').trim() || p.auto)) { p.desc = hit.name; p.auto = true; const d = document.getElementById(`pd-${which}-${i}`); if (d) d.value = hit.name; }
+  } else p.auto = false;
+  const q = String(el.value || '').trim();
+  const items = q.length >= (field === 'pn' ? 2 : 2) ? findParts(q, field) : [];
+  if (field === 'pn' && items.length === 1 && items[0].pn.toLowerCase() === q.toLowerCase()) return hideSugg();
+  showSugg(el, which, i, field, items);
+}
+function showSugg(el, which, i, field, items) {
+  const box = document.getElementById('sugg');
+  if (!items.length) return hideSugg();
+  sugg = { which, i, field, items, at: -1, el };
+  box.innerHTML = items.map((p, k) => `<button type="button" role="option" data-k="${k}" onmousedown="event.preventDefault();pickPart(${k})"><span class="pn">${esc(p.pn)}</span><span>${esc(p.name)}</span></button>`).join('');
+  const r = el.getBoundingClientRect();
+  box.style.left = (r.left + window.scrollX) + 'px'; box.style.top = (r.bottom + window.scrollY + 4) + 'px';
+  box.style.width = Math.max(r.width, 360) + 'px';
+  box.classList.add('open');
+}
+function hideSugg() { const box = document.getElementById('sugg'); if (box) box.classList.remove('open'); sugg.items = []; sugg.at = -1; }
+function partKey(e) {
+  if (!sugg.items.length || !document.getElementById('sugg').classList.contains('open')) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    sugg.at = (sugg.at + (e.key === 'ArrowDown' ? 1 : -1) + sugg.items.length) % sugg.items.length;
+    document.querySelectorAll('#sugg button').forEach((b, k) => b.classList.toggle('on', k === sugg.at));
+  } else if (e.key === 'Enter' && sugg.at >= 0) { e.preventDefault(); pickPart(sugg.at); }
+  else if (e.key === 'Escape') hideSugg();
+}
+function pickPart(k) {
+  const p = sugg.items[k]; if (!p) return;
+  const row = partList(sugg.which)[sugg.i]; if (!row) return;
+  row.pn = p.pn; row.desc = p.name; row.auto = true; scheduleSave();
+  const a = document.getElementById(`pn-${sugg.which}-${sugg.i}`), d = document.getElementById(`pd-${sugg.which}-${sugg.i}`);
+  if (a) a.value = p.pn; if (d) d.value = p.name;
+  hideSugg();
+}
+function partInputs(which, p, i) {
+  return `<input id="pd-${which}-${i}" value="${esc(p.desc || '')}" placeholder="Part (type to search)" autocomplete="off" oninput="partInput('${which}',${i},'desc',this)" onkeydown="partKey(event)" onblur="setTimeout(hideSugg,150)" aria-label="Part description">
+    <input id="pn-${which}-${i}" value="${esc(p.pn || '')}" placeholder="Part #" autocomplete="off" oninput="partInput('${which}',${i},'pn',this)" onkeydown="partKey(event)" onblur="setTimeout(hideSugg,150)" aria-label="Part number" style="max-width:180px;">`;
+}
+
 // ── WORK PERFORMED ──────────────────────────────────────
 const EXTRA_PHOTO_SECS = [['W', 'Work performed'], ['Chrono', 'Chrono screenshots'], ['Target', 'Accuracy target']];
 function workOf(r) { if (!r.work || typeof r.work !== 'object') r.work = {}; if (!Array.isArray(r.work.parts)) r.work.parts = []; return r.work; }
@@ -908,8 +1000,7 @@ function renderWork(r) {
 }
 function workPartRow(p, i) {
   return `<div class="prow"><input type="number" min="1" value="${esc(p.qty || 1)}" oninput="setWorkPart(${i},'qty',this.value)" aria-label="Quantity" style="max-width:80px;">
-    <input value="${esc(p.desc || '')}" placeholder="Part" oninput="setWorkPart(${i},'desc',this.value)" aria-label="Part">
-    <input value="${esc(p.pn || '')}" placeholder="Part #" oninput="setWorkPart(${i},'pn',this.value)" aria-label="Part number" style="max-width:180px;">
+    ${partInputs('W', p, i)}
     <button class="btn sm ghost" onclick="removeWorkPart(${i})">Remove</button></div>`;
 }
 function redrawWorkParts() { const el = document.getElementById('w-parts'); const w = workOf(curRec()); if (el) el.innerHTML = w.parts.map((p, i) => workPartRow(p, i)).join('') || '<span class="note">No parts yet.</span>'; }
@@ -919,7 +1010,7 @@ function removeWorkPart(i) { workOf(curRec()).parts.splice(i, 1); scheduleSave()
 function copyEstimateParts() {
   const r = curRec(), w = workOf(r), est = ((asOf(r).H || {}).v || {}).parts || [];
   if (w.parts.length && !confirm('Add the estimate’s parts to the list?')) return;
-  est.forEach(p => w.parts.push({ qty: p.qty || 1, desc: p.desc || '', pn: p.pn || '' }));
+  est.forEach(p => w.parts.push({ qty: p.qty || 1, desc: p.desc || '', pn: p.pn || '', auto: !!p.auto }));
   scheduleSave(); redrawWorkParts();
 }
 async function finishWork() {
@@ -927,7 +1018,7 @@ async function finishWork() {
   if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
   const patch = { repaired_by: me, repaired_at: new Date().toISOString() };
   if (Math.max(0, STEPS.indexOf(r.step)) < STEPS.indexOf('Testing')) { const st = Object.assign({}, r.step_times || {}); st.Repair = st.Repair || patch.repaired_at; st.Testing = patch.repaired_at; patch.step = 'Testing'; patch.step_times = st; }
-  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Repair done' + (patch.step ? ', moved to Testing' : '')); await loadEvents(r.id); recTab = 'Testing'; renderRecord(true); toast('Repair marked done'); }
+  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Repair done' + (patch.step ? ', moved to Testing' : '')); await loadEvents(r.id); recTab = STEP_TAB[r.step] || 'Testing'; renderRecord(true); window.scrollTo(0, 0); toast('Repair marked done'); }
 }
 
 // ── TESTING ─────────────────────────────────────────────
@@ -1104,7 +1195,7 @@ async function finishTesting() {
   if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
   const patch = { tested_by: me, tested_at: new Date().toISOString() };
   if (Math.max(0, STEPS.indexOf(r.step)) < STEPS.indexOf('QC')) { const st = Object.assign({}, r.step_times || {}); st.Testing = st.Testing || patch.tested_at; st.QC = patch.tested_at; patch.step = 'QC'; patch.step_times = st; }
-  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Testing done' + (patch.step ? ', moved to QC' : '')); await loadEvents(r.id); renderRecord(true); toast('Testing marked done'); }
+  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Testing done' + (patch.step ? ', moved to QC' : '')); recTab = STEP_TAB[r.step] || 'QC'; await loadEvents(r.id); renderRecord(true); window.scrollTo(0, 0); toast('Testing marked done'); }
 }
 
 // ── QC ──────────────────────────────────────────────────
@@ -1147,7 +1238,7 @@ async function passQc() {
   const now = new Date().toISOString();
   const patch = { qc_by: me, qc_at: now, qc: r.qc };
   if (STEPS.indexOf(r.step) < STEPS.indexOf('Ready to ship')) { const st = Object.assign({}, r.step_times || {}); st.QC = st.QC || now; st['Ready to ship'] = now; patch.step = 'Ready to ship'; patch.step_times = st; }
-  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'QC passed' + (patch.step ? ', moved to Ready to ship' : '')); await loadEvents(r.id); recTab = 'Report'; renderRecord(true); toast('QC passed. The Service Report is ready.'); }
+  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'QC passed' + (patch.step ? ', moved to Ready to ship' : '')); await loadEvents(r.id); recTab = 'Report'; renderRecord(true); window.scrollTo(0, 0); toast('QC passed. The Service Report is ready.'); }
 }
 function failQc() {
   document.getElementById('modal-body').innerHTML = `<h2>QC failed</h2>
@@ -1319,7 +1410,10 @@ function renderLists() {
       return `<div class="card" style="flex:1 1 300px;display:flex;flex-direction:column;gap:6px;"><h2>${title} <span class="note">(${list.length})</span></h2>
         ${list.map(o => `<div class="prow" style="margin:0;"><input value="${esc(o.value)}" onchange="renameOpt(${o.id}, this.value)" aria-label="${esc(title)} value"><button class="btn sm ghost" onclick="deleteOpt(${o.id})">Remove</button></div>`).join('') || '<span class="note">Empty.</span>'}
         <div class="prow" style="margin:6px 0 0;"><input id="add-${kind}" placeholder="${esc(ph)}" onkeydown="if(event.key==='Enter')addOpt('${kind}')"><button class="btn sm" onclick="addOpt('${kind}')">Add</button></div></div>`;
-    }).join('')}</div>`;
+    }).join('')}</div>
+    <div class="card" style="margin-top:18px;display:flex;flex-direction:column;gap:8px;"><h2>Parts <span class="note">(${parts.length.toLocaleString()} parts)</span></h2>
+      <span class="note">Used for the part lookup on Parts used. To update it, choose the new Excel export: the first column is the part number, the second the part name (a header row is fine). New parts are added and changed names updated; nothing is deleted.</span>
+      <div class="bar"><label class="btn">Update parts from Excel<input type="file" accept=".xlsx,.xls,.csv" hidden onchange="importParts(this.files[0]);this.value=''"></label><span class="note" id="parts-msg"></span></div></div>`;
 }
 function tidyOpt(kind, v) {
   v = String(v || '').trim(); if (!v) return '';
@@ -1349,6 +1443,35 @@ async function renameOpt(id, raw) {
   if (dupe) await sb.from('rr_options').delete().eq('id', id);
   else { const { error } = await sb.from('rr_options').update({ value: v }).eq('id', id); if (error) return toast('Could not rename: ' + error.message, true); }
   await loadAll(); renderLists(); toast(dupe ? 'Merged into ' + v : 'Renamed to ' + v);
+}
+async function importParts(file) {
+  const msg = document.getElementById('parts-msg');
+  if (!file) return;
+  if (!window.XLSX) { msg.textContent = 'The Excel reader did not load. Refresh and try again.'; return; }
+  msg.textContent = 'Reading ' + file.name + '…';
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+    const seen = new Set(), list = [];
+    rows.forEach(r => {
+      const pn = String(r[0] || '').trim(), name = String(r[1] || '').trim();
+      if (!pn || !name || /^part\s*(number|#|no)/i.test(pn) || seen.has(pn.toLowerCase())) return;
+      seen.add(pn.toLowerCase()); list.push({ part_number: pn, name });
+    });
+    if (!list.length) { msg.textContent = 'No parts found. The first column should be the part number and the second the name.'; return; }
+    const changed = list.filter(x => { const old = partsByPn[x.part_number.toLowerCase()]; return !old || old.name !== x.name; });
+    if (!changed.length) { msg.textContent = `All ${list.length.toLocaleString()} parts already match. Nothing to update.`; return; }
+    const added = changed.filter(x => !partsByPn[x.part_number.toLowerCase()]).length;
+    if (!confirm(`${list.length.toLocaleString()} parts in the file: ${added} new, ${changed.length - added} with a changed name. Update the parts list?`)) { msg.textContent = ''; return; }
+    for (let k = 0; k < changed.length; k += 500) {
+      msg.textContent = `Saving… ${Math.min(k + 500, changed.length)} of ${changed.length}`;
+      const batch = changed.slice(k, k + 500).map(x => Object.assign({ updated_at: new Date().toISOString() }, x));
+      const { error } = await sb.from('rr_parts').upsert(batch, { onConflict: 'part_number' });
+      if (error) throw error;
+    }
+    await loadParts(); renderLists();
+    toast(`Parts list updated: ${added} added, ${changed.length - added} renamed`);
+  } catch (e) { msg.textContent = 'Could not update: ' + (e.message || e); }
 }
 async function deleteOpt(id) {
   const o = options.find(x => x.id === id); if (!o) return;
@@ -1429,6 +1552,7 @@ async function signIn() {
 document.getElementById('auth-password').addEventListener('keydown', e => { if (e.key === 'Enter') signIn(); });
 async function signOut() { await sb.auth.signOut(); location.reload(); }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+window.addEventListener('resize', hideSugg);
 </script>
 </body>
 </html>
