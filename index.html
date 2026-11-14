@@ -772,7 +772,7 @@ const SECTIONS = [
     ['fasteners', 'Fasteners / exposed parts', ['Secure', 'Loose', 'Damaged', 'Missing', 'Not inspected']]] },
   { id: 'B', title: 'Configuration / completeness', rows: [
     ['config', 'Configuration (all that apply)', ['Factory original', 'Aftermarket', 'Modified', 'Unknown'], 'multi'],
-    ['parts', 'Required / received parts', ['Complete', 'Missing items', 'Unable to determine']]] },
+    ['parts', 'Required / received parts', ['Complete', 'Missing items', 'Unable to determine', 'Not applicable']]] },
   { id: 'C', title: 'Air system, as received', rows: [
     ['bottle_p', 'Bottle / cylinder pressure', ['Arrived empty (0 bar)', 'Reading', 'Not recorded'], null, 'bottle_bar'],
     ['reg_p', 'Regulator pressure', ['No pressure / empty', 'Reading', 'Not readable'], null, 'reg_bar'],
@@ -780,41 +780,52 @@ const SECTIONS = [
     ['leak', 'Air leakage', ['No leak detected', 'Leak detected', 'Not tested']]] },
   { id: 'D', title: 'Mechanical / function', rows: [
     ['cocking', 'Cocking lever', ['Pass', 'Fail', 'Not tested']],
-    ['magazine', 'Magazine fit / condition', ['Pass', 'Fail', 'Not tested']],
+    ['magazine', 'Magazine fit / condition', ['Pass', 'Fail', 'Not tested', 'Other']],
     ['loading', 'Loading / probe', ['Pass', 'Fail', 'Not tested']],
     ['trigger', 'Trigger / safety', ['Pass', 'Fail', 'Not tested']],
     ['controls', 'External controls / adjusters', ['Pass', 'Fail', 'Not tested']],
     ['noise', 'Mechanical resistance / noise', ['None observed', 'Abnormality observed', 'Not tested']]] },
   { id: 'E', title: 'Barrel / visible internal condition', rows: [
     ['alignment', 'Barrel assembly / alignment', ['Good', 'Issue observed', 'Not inspected']],
-    ['bore', 'Visible bore / liner condition', ['Good', 'Contamination', 'Damage', 'Not inspected']],
-    ['seals', 'Accessible seals (visual only)', ['Good', 'Issue observed', 'Not inspected']]] },
+    ['bore', 'Visible bore / liner condition', ['Good', 'Contamination', 'Damage', 'Not inspected']]] },
   { id: 'F', title: 'Functional / performance observations', rows: [
-    ['reproduced', 'Reported concern reproduced', ['Pass', 'Fail', 'Not tested']],
-    ['functional', 'Functional test (if authorized)', ['Pass', 'Fail', 'Not tested']],
+    ['reproduced', 'Reported concern reproduced', ['Yes', 'No', 'Not applicable']],
+    ['functional', 'Functional test', ['Pass', 'Fail', 'Not tested']],
     ['chrono', 'Chronograph / velocity test', ['Pass', 'Fail', 'Not tested']],
-    ['accuracy', 'Accuracy test (if authorized)', ['Pass', 'Fail', 'Not tested']]] },
+    ['accuracy', 'Accuracy test', ['Pass', 'Fail', 'Not tested']]] },
   { id: 'G', title: 'Assessment conclusion', rows: [
     ['overall', 'Overall status', ['No issues observed', 'Issues identified', 'Safety hold', 'Incomplete']]] },
-  { id: 'H', title: 'Preliminary repair estimate', internal: true, rows: [
-    ['labor', 'Preliminary labor time', ['Less than 30 min', '30-60 min', '1-2 hours', '2-4 hours', 'More than 4 hours', 'Unable to estimate yet']],
-    ['ident', 'Parts identification', ['Complete', 'Partial / to verify', 'Not yet determined']]] }
+  { id: 'H', title: 'Repair plan', internal: true, rows: [] }
 ];
 const CUSTOMER_SECS = SECTIONS.filter(s => !s.internal).map(s => s.id);
 let openSecs = new Set(), recTab = 'Assessment', photos = [], photoUrls = {}, saveTimer = null, saving = false;
 
-function asOf(r) { return r.assessment && typeof r.assessment === 'object' ? r.assessment : {}; }
+function asOf(r) { const a = r.assessment && typeof r.assessment === 'object' ? r.assessment : {}; migrateAssessment(a); return a; }
+// Older records: F "reproduced" used Pass/Fail/Not tested; H had three note boxes. Converted when shown, saved on the next edit.
+function migrateAssessment(a) {
+  if (a.__v >= 2) return;
+  const F = a.F && a.F.v;
+  if (F && F.reproduced) F.reproduced = ({ 'Pass': 'Yes', 'Fail': 'No', 'Not tested': 'Not applicable' })[F.reproduced] || F.reproduced;
+  const H = a.H && a.H.v;
+  if (H && !String(H.notes || '').trim()) {
+    const old = [['Proposed work', H.work], ['Further diagnosis', H.diag], ['Additional findings', H.extra]].filter(x => String(x[1] || '').trim());
+    if (old.length) H.notes = old.map(x => old.length > 1 ? x[0] + ': ' + String(x[1]).trim() : String(x[1]).trim()).join('\n\n');
+  }
+  Object.defineProperty(a, '__v', { value: 2, enumerable: false, configurable: true });
+}
 function secData(r, id) { const a = asOf(r); if (!a[id]) a[id] = { v: {} }; if (!a[id].v) a[id].v = {}; r.assessment = a; return a[id]; }
 function rowMissing(d, row) {
   const [key, , , kind, extra] = row, v = d.v[key];
   if (kind === 'multi') return !(Array.isArray(v) && v.length);
   if (!v) return true;
   if (extra && v === 'Reading' && !String(d.v[extra] || '').trim()) return true;
+  if (v === 'Other' && !String(d.v[key + '_other'] || '').trim()) return true;
   return false;
 }
 function secStatus(r, s) {
   const d = (asOf(r)[s.id]) || { v: {} };
   d.v = d.v || {};
+  if (s.id === 'H') return String(d.v.notes || '').trim() ? 'done' : (Array.isArray(d.v.parts) && d.v.parts.length ? 'partial' : 'empty');
   const missing = s.rows.filter(row => rowMissing(d, row)).length + (s.id === 'C' && d.v.leak === 'Leak detected' && !String(d.v.leak1 || '').trim() ? 1 : 0);
   const touched = Object.keys(d.v).some(k => { const x = d.v[k]; return Array.isArray(x) ? x.length : String(x || '').trim(); }) || String(d.raw || d.text || '').trim();
   return missing === 0 ? 'done' : touched ? 'partial' : 'empty';
@@ -854,6 +865,7 @@ function secInner(r, s) {
         return `<button type="button" class="opt ${on ? 'on' : ''}" aria-pressed="${on}" onclick="${kind === 'multi' ? 'toggleMulti' : 'setOpt'}('${s.id}','${key}',${JSON.stringify(o).replace(/"/g, '&quot;')})">${esc(o)}</button>`; }).join('') +
       (extra && val === 'Reading' ? `<input class="mini" type="number" inputmode="decimal" placeholder="bar" value="${esc(d.v[extra] || '')}" oninput="setVal('${s.id}','${extra}',this.value)" aria-label="${esc(label)} reading in bar"><span class="note">bar</span>` : '') +
       '</div></div>';
+    if (val === 'Other' && kind !== 'multi') h += `<label class="l" style="margin:0 0 8px;">${esc(label)}: describe<input value="${esc(d.v[key + '_other'] || '')}" oninput="setVal('${s.id}','${key}_other',this.value)" class="${String(d.v[key + '_other'] || '').trim() ? '' : 'need'}"></label>`;
   });
   if (s.id === 'C' && d.v.leak === 'Leak detected') {
     h += `<div class="grid3">${[1, 2, 3].map(n => `<label class="l">Leak ${n} location${n === 1 ? '' : ' (optional)'}<input value="${esc(d.v['leak' + n] || '')}" oninput="setVal('C','leak${n}',this.value)" class="${n === 1 && !String(d.v.leak1 || '').trim() ? 'need' : ''}"></label>`).join('')}</div>`;
@@ -862,13 +874,10 @@ function secInner(r, s) {
   if (s.id === 'F') h += `<label class="l" style="margin-top:8px;">Measurements / test details (if performed)<textarea oninput="setVal('F','measurements',this.value)">${esc(d.v.measurements || '')}</textarea></label>`;
   if (s.id === 'H') {
     const parts = Array.isArray(d.v.parts) ? d.v.parts : [];
-    h += `<label class="l" style="margin-top:8px;">Proposed work / repair actions<textarea oninput="setVal('H','work',this.value)">${esc(d.v.work || '')}</textarea></label>
-      <label class="l">Further diagnosis or inspection required<textarea oninput="setVal('H','diag',this.value)">${esc(d.v.diag || '')}</textarea></label>
-      <label class="l" style="max-width:220px;">Estimated technician time (hours)<input type="number" step="0.25" value="${esc(d.v.hours || '')}" oninput="setVal('H','hours',this.value)"></label>
-      <div class="l">Expected parts (preliminary)</div>
+    h += `<label class="l" style="margin-top:8px;">Notes<textarea rows="6" placeholder="What needs doing, what still needs checking, anything else found" oninput="setVal('H','notes',this.value)">${esc(d.v.notes || '')}</textarea></label>
+      <div class="l">Expected parts</div>
       <div id="h-parts">${parts.map((p, i) => partRow(p, i)).join('')}</div>
-      <div><button class="btn sm" onclick="addPart()">Add part</button></div>
-      <label class="l">Additional findings / uncertainties<textarea oninput="setVal('H','extra',this.value)">${esc(d.v.extra || '')}</textarea></label>`;
+      <div><button class="btn sm" onclick="addPart()">Add part</button></div>`;
   } else {
     h += `<div class="find">
       <label class="l">Your notes<textarea id="raw-${s.id}" placeholder="Quick notes are fine" oninput="setNotes('${s.id}','raw',this.value)">${esc(d.raw || '')}</textarea></label>
@@ -892,7 +901,7 @@ function rerenderSec(id) { const r = curRec(), s = SECTIONS.find(x => x.id === i
 function toggleSec(id) { openSecs.has(id) ? openSecs.delete(id) : openSecs.add(id); rerenderSec(id); }
 function setOpt(id, key, val) { const r = curRec(); const d = secData(r, id); d.v[key] = d.v[key] === val ? null : val; scheduleSave(); rerenderSec(id); refreshProgress(); }
 function toggleMulti(id, key, val) { const r = curRec(); const d = secData(r, id); const a = Array.isArray(d.v[key]) ? d.v[key] : []; d.v[key] = a.includes(val) ? a.filter(x => x !== val) : a.concat(val); scheduleSave(); rerenderSec(id); refreshProgress(); }
-function setVal(id, key, val) { const r = curRec(); secData(r, id).v[key] = val; scheduleSave(); }
+function setVal(id, key, val) { const r = curRec(); secData(r, id).v[key] = val; scheduleSave(); if (/_other$/.test(key)) refreshProgress(); }
 function setNotes(id, which, val) { notesObj(id)[which] = val; scheduleSave(); const b = document.getElementById('w-done'); if (b && id === 'W') b.disabled = !String(workOf(curRec()).text || workOf(curRec()).raw || '').trim(); }
 function addPart() { const r = curRec(); const d = secData(r, 'H'); d.v.parts = (Array.isArray(d.v.parts) ? d.v.parts : []).concat({ qty: 1, desc: '', pn: '' }); scheduleSave(); rerenderSec('H'); }
 function setPart(i, k, v) { const r = curRec(); const d = secData(r, 'H'); if (d.v.parts && d.v.parts[i]) { d.v.parts[i][k] = v; scheduleSave(); } }
@@ -988,7 +997,7 @@ async function addFiles(sec, fileList, recordId) {
       okN++;
     } catch (e) { toast('A photo did not upload: ' + (e.message || e), true); }
   }
-  if (okN) { await logEvent(rid, 'photo', 'Added ' + okN + ' photo' + (okN > 1 ? 's' : '') + ' to section ' + sec); await loadPhotos(rid); refreshPhotoAreas(); toast(okN + ' photo' + (okN > 1 ? 's' : '') + ' added'); }
+  if (okN) { await logEvent(rid, 'photo', 'Added ' + okN + ' photo' + (okN > 1 ? 's' : '') + ' to section ' + sec); await loadPhotos(rid); refreshPhotoAreas(); toast('✓ ' + okN + ' photo' + (okN > 1 ? 's' : '') + ' added to ' + secName(sec)); }
 }
 function dropFiles(e, sec) { e.preventDefault(); e.currentTarget.classList.remove('over'); addFiles(sec, e.dataTransfer.files); }
 async function deletePhoto(id) {
@@ -1000,14 +1009,29 @@ async function deletePhoto(id) {
   await loadPhotos(p.record_id); refreshPhotoAreas();
 }
 function phoneLink(sec) { return location.origin + location.pathname + '#phone=' + openRecordId + '&s=' + sec; }
+let qrPoll = null, qrSec = null;
+function secName(sec) { const x = EXTRA_PHOTO_SECS.find(e => e[0] === sec); if (x) return x[1]; const s = SECTIONS.find(e => e.id === sec); return s ? 'Section ' + s.id + ' · ' + s.title : 'section ' + sec; }
+function qrCountText() { const r = curRec(); const n = photos.filter(p => p.section === qrSec).length;
+  return `<b>${n}</b> photo${n === 1 ? '' : 's'} in ${esc(secName(qrSec))} on <b>${esc((r && r.freshdesk_ticket ? '#' + r.freshdesk_ticket + ' ' : '') + (r ? r.customer_name || '' : ''))}</b>`; }
+// Backup to live updates: while the QR window is open, check for new photos every 4 seconds
+async function qrCheck() {
+  const m = document.getElementById('modal'); const el = document.getElementById('qr-count');
+  if (!el || !m.classList.contains('open') || !openRecordId) { clearInterval(qrPoll); qrPoll = null; return; }
+  const before = photos.map(p => p.id).join();
+  await loadPhotos(openRecordId);
+  if (photos.map(p => p.id).join() !== before) refreshPhotoAreas();
+  const e2 = document.getElementById('qr-count'); if (e2) e2.innerHTML = qrCountText();
+}
 function phoneQr(sec) {
-  const url = phoneLink(sec);
+  const url = phoneLink(sec); qrSec = sec;
   document.getElementById('modal-body').innerHTML = `<h2>Add photos from a phone</h2>
     <p class="note">Scan this with the phone’s camera. It opens this repair on the phone, ready to add photos for ${esc((EXTRA_PHOTO_SECS.find(x => x[0] === sec) || [, 'section ' + sec])[1])}. They appear here within a few seconds.</p>
     <div id="qr" style="background:#fff;padding:14px;border-radius:8px;align-self:center;"></div>
     <p class="note" style="word-break:break-all;">${esc(url)}</p>
+    <div class="holdbox" id="qr-count" role="status" aria-live="polite">${qrCountText()}</div>
     <div class="bar"><button class="btn" onclick="closeModal()">Done</button></div>`;
   document.getElementById('modal').classList.add('open');
+  clearInterval(qrPoll); qrPoll = setInterval(qrCheck, 4000);
   try { new QRCode(document.getElementById('qr'), { text: url, width: 220, height: 220 }); }
   catch (e) { document.getElementById('qr').textContent = 'QR code could not be drawn. Open the link above on the phone.'; }
 }
@@ -1398,6 +1422,7 @@ function rowText(d, row) {
   if (kind === 'multi') return Array.isArray(v) && v.length ? v.join(', ') : '—';
   if (!v) return '—';
   if (extra && v === 'Reading') return (d.v[extra] ? d.v[extra] + ' bar' : 'Reading');
+  if (v === 'Other' && String(d.v[key + '_other'] || '').trim()) return 'Other: ' + String(d.v[key + '_other']).trim();
   return v;
 }
 function goodWord(v) { return /^(Good|Intact|Secure|Pass|No leak detected|None observed|Complete|No issues observed|Factory original)$/i.test(v); }
@@ -1749,6 +1774,9 @@ function subscribeLive() {
     })
     .subscribe();
 }
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && view === 'record' && openRecordId) { await loadPhotos(openRecordId); refreshPhotoAreas(); }
+});
 function onLive() { clearTimeout(liveT); liveT = setTimeout(liveApply, 800); }
 async function liveApply() {
   if (view === 'phone' || view === 'standards' || view === 'lists') return;
