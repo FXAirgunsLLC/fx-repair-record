@@ -89,6 +89,10 @@ tr.row:hover td{background:var(--surface)}
 .hist li:last-child{border-bottom:0}
 .hist .when{color:var(--dim);font-size:12px}
 .holdbox{background:var(--warn-soft);border:1px solid var(--warn);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.safebox{background:var(--red-soft);border:1px solid var(--red);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.safebox b.t{color:var(--red)}
+.btn.safe{border-color:var(--red);color:var(--red)}
+.locked{opacity:.45;pointer-events:none;user-select:none}
 .note{font-size:12px;color:var(--dim)}
 .modal-wrap{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:60;display:none;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px}
 .modal-wrap.open{display:flex}
@@ -599,18 +603,18 @@ function renderRecord(keepScroll) {
         <b>${c.done ? 'Shipped on day ' + c.day : 'Day ' + c.day + ' of ' + CLOCK_DAYS}</b><span class="muted">Received ${fmtDate(r.received_at)} · due ${fmtDate(c.due.toISOString())}${c.late && !c.done ? ' · late' : ''}</span></div>`
         : `<div class="clock"><span class="muted">The 14-day clock starts when the rifle is received.</span><input type="date" id="rec-date" value="${isoToDate(new Date().toISOString())}" style="width:auto;"><button class="btn sm" onclick="setReceived()">Mark received</button></div>`}
       <div class="bar" style="margin-top:12px;">
-        ${si > 0 ? `<button class="btn sm ghost" onclick="moveStep(-1)">← Back to ${esc(STEPS[si - 1])}</button>` : ''}
-        ${next ? (DONE_IN_TAB[r.step]
+        ${si > 0 && !onSafetyHold(r) ? `<button class="btn sm ghost" onclick="moveStep(-1)">← Back to ${esc(STEPS[si - 1])}</button>` : ''}
+        ${next && !onSafetyHold(r) ? (DONE_IN_TAB[r.step]
           ? `<button class="btn sm primary" onclick="goTab('${STEP_TAB[r.step]}')">Go to ${esc(STEP_TAB[r.step])} →</button><span class="note">${esc(DONE_IN_TAB[r.step])}</span>`
           : `<button class="btn sm primary" onclick="moveStep(1)" ${!r.received_at ? 'disabled title="Mark it received first"' : ''}>Move to ${esc(next)} →</button>`) : ''}
-        ${!r.hold_reason ? `<button class="btn sm" onclick="openHold()">Put on hold</button>` : ''}
+        ${!r.hold_reason ? `<button class="btn sm" onclick="openHold()">Put on hold</button>` : ''}${!onSafetyHold(r) ? `<button class="btn sm safe" onclick="openSafetyConcern()">⚠ Safety concern</button>` : ''}
       </div>
-      ${r.hold_reason ? `<div class="holdbox" style="margin-top:12px;"><b>On hold: ${esc(r.hold_reason)}</b><span class="note" style="color:var(--warn);">Since ${fmtDT(r.hold_since)}. The 14-day clock keeps running.</span><div><button class="btn sm" onclick="resumeHold()">Resume work</button></div></div>` : ''}
+      ${onSafetyHold(r) ? safetyHoldBox(r) : r.hold_reason ? `<div class="holdbox" style="margin-top:12px;"><b>On hold: ${esc(r.hold_reason)}</b><span class="note" style="color:var(--warn);">Since ${fmtDT(r.hold_since)}. The 14-day clock keeps running.</span><div><button class="btn sm" onclick="resumeHold()">Resume work</button></div></div>` : ''}
     </div>
     <div class="layout">
       <div class="mainc">
         ${renderTabs(r)}
-        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${recTab === 'Assessment' ? renderAssessment(r) : recTab === 'Work performed' ? renderWork(r) : recTab === 'Testing' ? renderTesting(r) : recTab === 'QC' ? renderQC(r) : recTab === 'Report' ? renderReport(r) : '<div class="soon">Coming in a later install.</div>'}</div>
+        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${onSafetyHold(r) && recTab !== 'Assessment' ? `<div class="card"><b>On safety hold</b><span class="note">Nothing can be done on this rifle until management has advised and the hold is lifted.</span><div><button class="btn sm" onclick="goTab('Assessment')">Go to the safety check</button></div></div>` : recTab === 'Assessment' ? renderAssessment(r) : recTab === 'Work performed' ? renderWork(r) : recTab === 'Testing' ? renderTesting(r) : recTab === 'QC' ? renderQC(r) : recTab === 'Report' ? renderReport(r) : '<div class="soon">Coming in a later install.</div>'}</div>
         <div class="card"><h2 style="margin-bottom:8px;">History</h2><ul class="hist">${events.length ? events.map(e => `<li>${esc(e.text)}<div class="when">${esc(e.by_email === 'system' ? 'Automatic' : nameOf(e.by_email))}, ${fmtDT(e.at)}</div></li>`).join('') : '<li class="muted">No history yet.</li>'}</ul></div>
       </div>
       <div class="side">
@@ -719,6 +723,7 @@ async function moveStep(dir, to) {
   const si = Math.max(0, STEPS.indexOf(r.step));
   const target = to || STEPS[si + dir];
   if (!target) return;
+  if (onSafetyHold(r)) return toast('This rifle is on safety hold. Lift the hold first.', true);
   if (dir > 0 && !r.received_at) return toast('Mark it received first.', true);
   const st = Object.assign({}, r.step_times || {});
   if (dir > 0 || to) st[target] = new Date().toISOString();
@@ -751,6 +756,7 @@ async function saveHold() {
 }
 async function resumeHold() {
   const r = records.find(x => x.id === openRecordId); if (!r) return;
+  if (onSafetyHold(r)) return openLiftSafety();
   const mins = r.hold_since ? Math.round((Date.now() - new Date(r.hold_since).getTime()) / 60000) : null;
   const reason = r.hold_reason;
   if (await patchRecord({ hold_reason: null, hold_since: null })) {
@@ -758,6 +764,102 @@ async function resumeHold() {
     await logEvent(r.id, 'resume', 'Resumed (was: ' + reason + ')' + dur, mins);
     await loadEvents(r.id); renderRecord(true);
   }
+}
+
+// ── SAFETY CHECK ────────────────────────────────────────
+// The first thing checked. A concern puts the rifle on "Safety hold": everything is locked until
+// management has advised and someone lifts the hold. In-house only, never on the Service Report.
+// The database posts the Teams message (Workflow Tasks chat) when the hold starts and when it's lifted.
+const SAFETY_HOLD = 'Safety hold';
+function onSafetyHold(r) { return !!r && r.hold_reason === SAFETY_HOLD; }
+function safetyOf(r) { const a = asOf(r); if (!a.S || typeof a.S !== 'object') a.S = {}; if (!Array.isArray(a.S.history)) a.S.history = []; r.assessment = a; return a.S; }
+function safetyReady(r) { return !!safetyOf(r).status && !onSafetyHold(r); }
+function photoBox(sec) {
+  return `<div class="phwrap"><div class="l">Photos</div><div class="phs" id="ph-${sec}">${photosHtml(sec)}</div>
+    <div class="drop" ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')" ondrop="dropFiles(event,'${sec}')">
+      Drag photos here, or <label class="btn sm">Choose files<input type="file" accept="image/*" multiple hidden onchange="addFiles('${sec}',this.files);this.value=''"></label>
+      <button class="btn sm" onclick="phoneQr('${sec}')">Add from phone</button></div></div>`;
+}
+function safetyLines(S) {
+  return S.history.map(x => `<div><b>Safety concern</b> found by ${esc(nameOf(x.by))}, ${fmtDT(x.at)}: ${esc(x.note || '')}${x.lifted_at
+    ? `<div class="note">Hold lifted ${fmtDT(x.lifted_at)} by ${esc(nameOf(x.lifted_by))}. Advised by ${esc(x.approver || '')}: ${esc(x.decision || '')}</div>` : ''}</div>`).join('');
+}
+function safetyCard(r) {
+  const S = safetyOf(r);
+  if (onSafetyHold(r)) return `<div class="safebox"><b class="t">⚠ Safety check: on safety hold</b>${safetyLines(S)}
+    <span class="note">Don’t work on this rifle until management has advised. Add photos of what you found below.</span>${photoBox('S')}
+    <div><button class="btn sm primary" onclick="openLiftSafety()">Lift safety hold</button></div></div>`;
+  if (!S.status) return `<div class="safebox"><b class="t">Safety check</b>
+    <span>Check this first, before anything else. Is there a safety concern with this rifle?</span>
+    <div class="bar"><button class="btn sm" onclick="markSafetyClear()">No safety concern</button><button class="btn sm safe" onclick="openSafetyConcern()">Safety concern found</button></div></div>`;
+  const hasPics = photos.some(p => p.section === 'S');
+  return `<div class="card" style="display:flex;flex-direction:column;gap:8px;"><b>Safety check</b>
+    ${S.status === 'clear' && !S.history.length ? `<span>No safety concern. Checked by ${esc(nameOf(S.by))}, ${fmtDT(S.at)}.</span>` : safetyLines(S)}
+    ${hasPics ? photoBox('S') : ''}
+    <span class="note">Found something later? Use “⚠ Safety concern” at the top of the repair.</span></div>`;
+}
+async function saveSafety(patch) {
+  const r = curRec(); if (!r) return null;
+  if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
+  return patchRecord(Object.assign({ assessment: r.assessment }, patch));
+}
+async function markSafetyClear() {
+  const r = curRec(); if (!r) return;
+  const S = safetyOf(r); S.status = 'clear'; S.by = me; S.at = new Date().toISOString();
+  if (await saveSafety({})) { await logEvent(r.id, 'edit', 'Safety check: no safety concern'); await loadEvents(r.id); renderRecord(true); }
+}
+function openSafetyConcern() {
+  document.getElementById('modal-body').innerHTML = `<h2>Safety concern</h2>
+    <p class="note">The rifle goes on safety hold. Nothing can be done on it until management has advised and the hold is lifted. A message goes to the Workflow Tasks chat in Teams. This stays in-house and never appears on the Service Report. The 14-day clock keeps running.</p>
+    <label class="l">What did you find?<textarea id="sf-note" rows="4"></textarea></label>
+    <div class="bar"><button class="btn primary" onclick="saveSafetyConcern()">Put on safety hold</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
+  document.getElementById('modal').classList.add('open');
+  setTimeout(() => { const t = document.getElementById('sf-note'); if (t) t.focus(); }, 50);
+}
+async function saveSafetyConcern() {
+  const note = document.getElementById('sf-note').value.trim();
+  if (!note) return toast('Describe what you found.', true);
+  const r = curRec(); if (!r) return;
+  closeModal();
+  const now = new Date().toISOString(), prev = r.hold_reason, prevSince = r.hold_since;
+  const S = safetyOf(r); S.status = 'concern'; S.by = S.by || me; S.at = S.at || now;
+  S.history.push({ note, by: me, at: now });
+  if (await saveSafety({ hold_reason: SAFETY_HOLD, hold_since: now })) {
+    if (prev) { const mins = prevSince ? Math.round((Date.now() - new Date(prevSince).getTime()) / 60000) : null; await logEvent(r.id, 'resume', 'Hold ended by a safety hold (was: ' + prev + ')', mins); }
+    await logEvent(r.id, 'hold', 'On hold: Safety hold. ' + note);
+    recTab = 'Assessment'; await loadEvents(r.id); renderRecord(true); window.scrollTo(0, 0);
+    toast('On safety hold. Teams has been told.');
+  } else { S.history.pop(); }
+}
+function safetyHoldBox(r) {
+  const S = safetyOf(r), x = S.history[S.history.length - 1] || {};
+  return `<div class="safebox" style="margin-top:12px;"><b class="t">⚠ On safety hold</b>
+    <span>${esc(x.note || '')}</span>
+    <span class="note">Found by ${esc(nameOf(x.by))}, ${fmtDT(r.hold_since)}. Don’t work on this rifle until management has advised. The 14-day clock keeps running.</span>
+    <div><button class="btn sm primary" onclick="openLiftSafety()">Lift safety hold</button></div></div>`;
+}
+function openLiftSafety() {
+  document.getElementById('modal-body').innerHTML = `<h2>Lift safety hold</h2>
+    <p class="note">Record who advised and what was decided. A message goes to the Workflow Tasks chat in Teams.</p>
+    <label class="l">Who advised?<input id="sf-who" placeholder="Name"></label>
+    <label class="l">What was decided?<textarea id="sf-dec" rows="4"></textarea></label>
+    <div class="bar"><button class="btn primary" onclick="saveLiftSafety()">Lift safety hold</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
+  document.getElementById('modal').classList.add('open');
+}
+async function saveLiftSafety() {
+  const who = document.getElementById('sf-who').value.trim(), dec = document.getElementById('sf-dec').value.trim();
+  if (!who || !dec) return toast('Fill in who advised and what was decided.', true);
+  const r = curRec(); if (!r) return;
+  closeModal();
+  const S = safetyOf(r), x = S.history[S.history.length - 1];
+  const mins = r.hold_since ? Math.round((Date.now() - new Date(r.hold_since).getTime()) / 60000) : null;
+  const now = new Date().toISOString();
+  if (x) Object.assign(x, { approver: who, decision: dec, lifted_by: me, lifted_at: now });
+  else S.history.push({ note: '', by: me, at: r.hold_since || now, approver: who, decision: dec, lifted_by: me, lifted_at: now });
+  if (await saveSafety({ hold_reason: null, hold_since: null })) {
+    await logEvent(r.id, 'resume', 'Safety hold lifted (was: Safety hold). Advised by ' + who + ': ' + dec, mins);
+    await loadEvents(r.id); renderRecord(true); toast('Safety hold lifted');
+  } else if (x) { ['approver', 'decision', 'lifted_by', 'lifted_at'].forEach(k => delete x[k]); }
 }
 
 // ── ASSESSMENT (Mathias's Initial Rifle Assessment, A–H) ──
@@ -794,7 +896,7 @@ const SECTIONS = [
     ['chrono', 'Chronograph / velocity test', ['Pass', 'Fail', 'Not tested']],
     ['accuracy', 'Accuracy test', ['Pass', 'Fail', 'Not tested']]] },
   { id: 'G', title: 'Assessment conclusion', rows: [
-    ['overall', 'Overall status', ['No issues observed', 'Issues identified', 'Safety hold', 'Incomplete']]] },
+    ['overall', 'Overall status', ['No issues observed', 'Issues identified', 'Incomplete']]] },
   { id: 'H', title: 'Repair plan', internal: true, rows: [] }
 ];
 const CUSTOMER_SECS = SECTIONS.filter(s => !s.internal).map(s => s.id);
@@ -842,12 +944,15 @@ function renderAssessment(r) {
   let h = `<div class="bar" style="justify-content:space-between;">
       <span><b>${done} of ${CUSTOMER_SECS.length}</b> customer sections done${r.assessed_at ? ` · finished by ${esc(nameOf(r.assessed_by))} on ${fmtDate(r.assessed_at)}` : ''}</span>
       <span class="note" id="as-status">Saves automatically</span></div>
-    <p class="note">Fill this in as received, before any adjustment, cleaning or repair. Sections A–G go on the customer’s Service Report; H stays internal.</p>`;
-  h += SECTIONS.map(s => `<div class="sec ${openSecs.has(s.id) ? 'open' : ''}" id="sec-${s.id}">${secInner(r, s)}</div>`).join('');
-  const ready = done === CUSTOMER_SECS.length;
+    <p class="note">Fill this in as received, before any adjustment, cleaning or repair. Sections A–G go on the customer’s Service Report; the safety check and H stay internal.</p>`;
+  h += safetyCard(r);
+  const open = safetyReady(r);
+  if (!open) h += `<p class="note">${onSafetyHold(r) ? 'Sections A–H are locked while the rifle is on safety hold.' : 'Answer the safety check first. Sections A–H open after that.'}</p>`;
+  h += `<div class="${open ? '' : 'locked'}" ${open ? '' : 'aria-disabled="true"'} style="display:flex;flex-direction:column;gap:12px;">` + SECTIONS.map(s => `<div class="sec ${openSecs.has(s.id) ? 'open' : ''}" id="sec-${s.id}">${secInner(r, s)}</div>`).join('') + '</div>';
+  const ready = done === CUSTOMER_SECS.length && open;
   h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;">
       <b>Finish the assessment</b>
-      <span class="note">${ready ? 'All customer sections are done.' : 'Sections A–G must be complete first. Missing answers are marked in yellow.'}</span>
+      <span class="note">${ready ? 'All customer sections are done.' : !open ? 'The safety check comes first.' : 'Sections A–G must be complete first. Missing answers are marked in yellow.'}</span>
       <div class="bar"><button class="btn primary" ${ready ? '' : 'disabled'} onclick="finishAssessment('Quote')">Finish → Quote</button>
       <button class="btn" ${ready ? '' : 'disabled'} onclick="finishAssessment('Repair')">Finish → Repair (warranty, no quote)</button></div></div>`;
   return h;
@@ -909,7 +1014,7 @@ function removePart(i) { const r = curRec(); const d = secData(r, 'H'); (d.v.par
 function refreshProgress() { if (recTab !== 'Assessment') return; const r = curRec(); const el = document.querySelector('#tabbody > .bar span'); if (!r || !el) return;
   const done = CUSTOMER_SECS.filter(id => secStatus(r, SECTIONS.find(s => s.id === id)) === 'done').length;
   el.innerHTML = `<b>${done} of ${CUSTOMER_SECS.length}</b> customer sections done`;
-  const ready = done === CUSTOMER_SECS.length;
+  const ready = done === CUSTOMER_SECS.length && safetyReady(r);
   document.querySelectorAll('#tabbody .card .btn').forEach(b => { b.disabled = !ready; });
 }
 function scheduleSave() {
@@ -927,6 +1032,7 @@ async function saveAssessment() {
 }
 async function finishAssessment(next) {
   const r = curRec(); if (!r) return;
+  if (!safetyReady(r)) return toast('Do the safety check first.', true);
   if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
   const patch = { assessed_by: me, assessed_at: new Date().toISOString() };
   const si = Math.max(0, STEPS.indexOf(r.step));
@@ -1118,7 +1224,7 @@ function partInputs(which, p, i) {
 }
 
 // ── WORK PERFORMED ──────────────────────────────────────
-const EXTRA_PHOTO_SECS = [['W', 'Work performed'], ['Chrono', 'Chrono screenshots'], ['Target', 'Accuracy target']];
+const EXTRA_PHOTO_SECS = [['S', 'Safety check'], ['W', 'Work performed'], ['Chrono', 'Chrono screenshots'], ['Target', 'Accuracy target']];
 function workOf(r) { if (!r.work || typeof r.work !== 'object') r.work = {}; if (!Array.isArray(r.work.parts)) r.work.parts = []; return r.work; }
 function notesObj(id) { const r = curRec(); return id === 'W' ? workOf(r) : secData(r, id); }
 function notesBlock(id, label) {
@@ -1792,7 +1898,10 @@ async function launch() {
   if (launched) return; launched = true;
   try { await loadAll(); } catch (e) { document.getElementById('view').innerHTML = '<div class="empty">Could not load: ' + esc(e.message) + '. Has 12-repair-record.sql been run?</div>'; return; }
   subscribeLive();
-  if (phoneParams()) renderPhone(); else renderList();
+  const link = location.hash.match(/^#r=([\w-]+)/);
+  if (phoneParams()) renderPhone();
+  else if (link && records.find(x => x.id === link[1])) { history.replaceState(null, '', location.pathname); openRecord(link[1]); }
+  else renderList();
 }
 function onSession(s) {
   if (s) { document.getElementById('auth').classList.add('hidden'); me = (s.user.email || '').toLowerCase(); document.getElementById('user-email').textContent = me; setTimeout(launch, 0); }
