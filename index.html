@@ -222,15 +222,19 @@ const SB_URL = 'https://rhvmzaljkgqnwjcstnen.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJodm16YWxqa2dxbndqY3N0bmVuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MTA0OTksImV4cCI6MjA5NzI4NjQ5OX0.3qPGkA9tyvTDWqPQrBjJUnp9_PzNxBJQ-NCv2dUo2DE';
 const sb = window.supabase.createClient(SB_URL, SB_KEY);
 const SERVER = 'https://fx-tracking-server.onrender.com';
-const STEPS = ['Received', 'Assessment', 'Quote', 'Repair', 'Testing', 'QC', 'Ready to ship', 'Shipped'];
+const STEPS = ['Received', 'Assessment', 'Quote', 'Repair', 'QC', 'Ready to ship', 'Shipped'];
+// Repair and testing are one step (stored as "Repair"). Older records at "Testing" count as "Repair".
+const RT_TAB = 'Repair & testing';
+function stepName(s) { return s === 'Repair' || s === 'Testing' ? RT_TAB : s; }
+function normStep(r) { if (r && r.step === 'Testing') r.step = 'Repair'; return r; }
 const HOLD_REASONS = ['Waiting on customer approval', 'Waiting on parts from Sweden', 'Waiting on payment', 'Needs more diagnosis', 'Shop backlog', 'Other'];
 const CLOCK_DAYS = 14;
 // Velocity standards are off for now: techs make the Pass/Fail call. Set to true to bring them back.
 const STANDARDS_ON = false;
 // The tab always follows the step
-const STEP_TAB = { 'Received': 'Assessment', 'Assessment': 'Assessment', 'Quote': 'Assessment', 'Repair': 'Work performed', 'Testing': 'Testing', 'QC': 'QC', 'Ready to ship': 'Report', 'Shipped': 'Report' };
+const STEP_TAB = { 'Received': 'Assessment', 'Assessment': 'Assessment', 'Quote': 'Assessment', 'Repair': RT_TAB, 'QC': 'QC', 'Ready to ship': 'Report', 'Shipped': 'Report' };
 // Steps that move on only with the "done" button inside their tab (so who/when is recorded)
-const DONE_IN_TAB = { 'Assessment': 'Finish it with the button at the bottom of the Assessment tab.', 'Repair': 'Mark the repair done at the bottom of Work performed.', 'Testing': 'Finish it at the bottom of the Testing tab.', 'QC': 'Sign off at the bottom of the QC tab.', 'Ready to ship': 'Add the tracking # under Return shipment and send the report. Shipped is stamped from FedEx.' };
+const DONE_IN_TAB = { 'Assessment': 'Finish it with the button at the bottom of the Assessment tab.', 'Repair': 'Finish it at the bottom of the Repair & testing tab.', 'QC': 'Sign off at the bottom of the QC tab.', 'Ready to ship': 'Add the tracking # under Return shipment and send the report. Shipped is stamped from FedEx.' };
 const CARRIERS = ['FedEx', 'UPS', 'USPS', 'Other', 'Customer pickup'];
 const SURVEY_DAYS = 5;
 function trackUrl(carrier, n) {
@@ -318,7 +322,7 @@ async function loadAll() {
   ]);
   if (a.error) throw a.error;
   if (b.error) throw b.error;
-  tickets = a.data || []; records = b.data || [];
+  tickets = a.data || []; records = (b.data || []).map(normStep);
   const o = await sb.from('rr_options').select('*').order('sort', { ascending: true }).order('value', { ascending: true });
   options = o.error ? [] : (o.data || []);
   const sv = await sb.from('rr_surveys').select('*').order('created_at', { ascending: false });
@@ -366,7 +370,7 @@ function renderList() {
 function stepCell(r) {
   if (!r) return '<span class="pill">Not started</span>';
   const c = clockOf(r);
-  let h = `<span class="pill step">${esc(r.step || 'Received')}</span>`;
+  let h = `<span class="pill step">${esc(stepName(r.step || 'Received'))}</span>`;
   if (r.hold_reason) h += ` <span class="pill hold">On hold</span>`;
   if (c) h += ` <span class="pill ${c.late ? 'late' : ''}">${c.done ? c.day + ' days total' : 'Day ' + c.day + ' of ' + CLOCK_DAYS}</span>`;
   if (r.delivered_at) h += ` <span class="pill step">Delivered ${fmtDate(r.delivered_at)}</span>`;
@@ -439,15 +443,15 @@ function renderDash(el) {
     <div class="kpi"><b>${avgTurn}</b><span class="note">average days, received to shipped</span></div></div>
   <div class="card" style="margin-bottom:14px;"><h2 style="margin-bottom:10px;">Where open repairs are</h2><div class="pipe">${pipeSteps.map(x => {
       const n = open.filter(r => (r.step || 'Received') === x).length, hl = open.filter(r => (r.step || 'Received') === x && r.hold_reason).length;
-      return `<div><b>${n}</b><span class="note">${esc(x)}${hl ? ` · <span style="color:var(--warn)">${hl} on hold</span>` : ''}</span></div>`; }).join('')}</div></div>
+      return `<div><b>${n}</b><span class="note">${esc(stepName(x))}${hl ? ` · <span style="color:var(--warn)">${hl} on hold</span>` : ''}</span></div>`; }).join('')}</div></div>
   <div class="layout" style="margin-top:0;">
     <div class="card" style="flex:1 1 360px;"><h2 style="margin-bottom:8px;">Average days in each step</h2>
-      ${Object.keys(per).length ? `<table><tbody>${STEPS.filter(x => per[x]).map(x => { const a = per[x].reduce((p, q) => p + q, 0) / per[x].length; return `<tr><td>${esc(x)}</td><td class="num" style="font-size:18px;">${a.toFixed(1)}</td><td class="note">${per[x].length} repair${per[x].length > 1 ? 's' : ''}</td></tr>`; }).join('')}</tbody></table>` : '<span class="note">Not enough finished steps yet.</span>'}</div>
+      ${Object.keys(per).length ? `<table><tbody>${STEPS.filter(x => per[x]).map(x => { const a = per[x].reduce((p, q) => p + q, 0) / per[x].length; return `<tr><td>${esc(stepName(x))}</td><td class="num" style="font-size:18px;">${a.toFixed(1)}</td><td class="note">${per[x].length} repair${per[x].length > 1 ? 's' : ''}</td></tr>`; }).join('')}</tbody></table>` : '<span class="note">Not enough finished steps yet.</span>'}</div>
     <div class="card" style="flex:1 1 420px;"><h2 style="margin-bottom:8px;">What holds repairs up</h2>
       ${holdList.length ? `<table><thead><tr><th>Hold reason</th><th>Times</th><th>Total days</th><th></th></tr></thead><tbody>${holdList.map(([k, v]) => `<tr><td>${esc(k)}${v.open ? ` <span class="pill hold">${v.open} now</span>` : ''}</td><td>${v.n}</td><td class="num" style="font-size:18px;">${v.days.toFixed(1)}</td><td style="width:30%;"><div class="hbar"><div style="width:${Math.round(v.days / maxHold * 100)}%"></div></div></td></tr>`).join('')}</tbody></table>` : '<span class="note">No holds in this period.</span>'}</div></div>
   <div class="card" style="margin-top:14px;"><h2 style="margin-bottom:8px;">Late or close to late (day 10+)</h2>
     ${risk.length ? `<table><thead><tr><th>Day</th><th>Ticket #</th><th>Customer</th><th>Model</th><th>Step</th><th>Hold</th></tr></thead><tbody>${risk.map(r => { const c = clockOf(r);
-      return `<tr class="row" onclick="openRecord('${r.id}')"><td class="num" style="font-size:19px;color:${c.late ? 'var(--red)' : 'var(--warn)'};">${c.day}</td><td>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) : '—'}</td><td>${esc(r.customer_name || '')}${r.is_test ? ' <span class="pill test">TEST</span>' : ''}</td><td>${esc(r.model || '')}</td><td>${esc(r.step || '')}</td><td>${r.hold_reason ? `<span class="pill hold">${esc(r.hold_reason)}</span>` : ''}</td></tr>`; }).join('')}</tbody></table>` : '<span class="note">Nothing at day 10 or later. Nice.</span>'}</div>`;
+      return `<tr class="row" onclick="openRecord('${r.id}')"><td class="num" style="font-size:19px;color:${c.late ? 'var(--red)' : 'var(--warn)'};">${c.day}</td><td>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) : '—'}</td><td>${esc(r.customer_name || '')}${r.is_test ? ' <span class="pill test">TEST</span>' : ''}</td><td>${esc(r.model || '')}</td><td>${esc(stepName(r.step || ''))}</td><td>${r.hold_reason ? `<span class="pill hold">${esc(r.hold_reason)}</span>` : ''}</td></tr>`; }).join('')}</tbody></table>` : '<span class="note">Nothing at day 10 or later. Nice.</span>'}</div>`;
   el.innerHTML = h;
 }
 function renderRows() {
@@ -598,15 +602,15 @@ function renderRecord(keepScroll) {
       <div class="bar">${r.report_sent_at ? `<span class="pill step">Report sent ${fmtDate(r.report_sent_at)}</span>` : ''}<button class="btn" onclick="recTab='Report';renderRecord(true)">Service Report</button></div>
     </div>
     <div class="card" style="margin-top:14px;">
-      <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}"><b>${s}</b><span>${st[s] ? fmtDate(st[s]) : (i === si ? 'now' : '')}</span></div>`).join('')}</div>
+      <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}"><b>${esc(stepName(s))}</b><span>${st[s] ? fmtDate(st[s]) : (i === si ? 'now' : '')}</span></div>`).join('')}</div>
       ${c ? `<div class="clock"><div class="track ${c.late ? 'late' : c.warn ? 'warn' : ''}"><div style="width:${Math.min(100, c.day / CLOCK_DAYS * 100)}%"></div></div>
         <b>${c.done ? 'Shipped on day ' + c.day : 'Day ' + c.day + ' of ' + CLOCK_DAYS}</b><span class="muted">Received ${fmtDate(r.received_at)} · due ${fmtDate(c.due.toISOString())}${c.late && !c.done ? ' · late' : ''}</span></div>`
         : `<div class="clock"><span class="muted">The 14-day clock starts when the rifle is received.</span><input type="date" id="rec-date" value="${isoToDate(new Date().toISOString())}" style="width:auto;"><button class="btn sm" onclick="setReceived()">Mark received</button></div>`}
       <div class="bar" style="margin-top:12px;">
-        ${si > 0 && !onSafetyHold(r) ? `<button class="btn sm ghost" onclick="moveStep(-1)">← Back to ${esc(STEPS[si - 1])}</button>` : ''}
+        ${si > 0 && !onSafetyHold(r) ? `<button class="btn sm ghost" onclick="moveStep(-1)">← Back to ${esc(stepName(STEPS[si - 1]))}</button>` : ''}
         ${next && !onSafetyHold(r) ? (DONE_IN_TAB[r.step]
           ? `<button class="btn sm primary" onclick="goTab('${STEP_TAB[r.step]}')">Go to ${esc(STEP_TAB[r.step])} →</button><span class="note">${esc(DONE_IN_TAB[r.step])}</span>`
-          : `<button class="btn sm primary" onclick="moveStep(1)" ${!r.received_at ? 'disabled title="Mark it received first"' : ''}>Move to ${esc(next)} →</button>`) : ''}
+          : `<button class="btn sm primary" onclick="moveStep(1)" ${!r.received_at ? 'disabled title="Mark it received first"' : ''}>Move to ${esc(stepName(next))} →</button>`) : ''}
         ${!r.hold_reason ? `<button class="btn sm" onclick="openHold()">Put on hold</button>` : ''}${!onSafetyHold(r) ? `<button class="btn sm safe" onclick="openSafetyConcern()">⚠ Safety concern</button>` : ''}
       </div>
       ${onSafetyHold(r) ? safetyHoldBox(r) : r.hold_reason ? `<div class="holdbox" style="margin-top:12px;"><b>On hold: ${esc(r.hold_reason)}</b><span class="note" style="color:var(--warn);">Since ${fmtDT(r.hold_since)}. The 14-day clock keeps running.</span><div><button class="btn sm" onclick="resumeHold()">Resume work</button></div></div>` : ''}
@@ -614,7 +618,7 @@ function renderRecord(keepScroll) {
     <div class="layout">
       <div class="mainc">
         ${renderTabs(r)}
-        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${onSafetyHold(r) && recTab !== 'Assessment' ? `<div class="card"><b>On safety hold</b><span class="note">Nothing can be done on this rifle until management has advised and the hold is lifted.</span><div><button class="btn sm" onclick="goTab('Assessment')">Go to the safety check</button></div></div>` : recTab === 'Assessment' ? renderAssessment(r) : recTab === 'Work performed' ? renderWork(r) : recTab === 'Testing' ? renderTesting(r) : recTab === 'QC' ? renderQC(r) : recTab === 'Report' ? renderReport(r) : '<div class="soon">Coming in a later install.</div>'}</div>
+        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${onSafetyHold(r) && recTab !== 'Assessment' ? `<div class="card"><b>On safety hold</b><span class="note">Nothing can be done on this rifle until management has advised and the hold is lifted.</span><div><button class="btn sm" onclick="goTab('Assessment')">Go to the safety check</button></div></div>` : recTab === 'Assessment' ? renderAssessment(r) : recTab === RT_TAB ? renderRepairTesting(r) : recTab === 'QC' ? renderQC(r) : recTab === 'Report' ? renderReport(r) : '<div class="soon">Coming in a later install.</div>'}</div>
         <div class="card"><h2 style="margin-bottom:8px;">History</h2><ul class="hist">${events.length ? events.map(e => `<li>${esc(e.text)}<div class="when">${esc(e.by_email === 'system' ? 'Automatic' : nameOf(e.by_email))}, ${fmtDT(e.at)}</div></li>`).join('') : '<li class="muted">No history yet.</li>'}</ul></div>
       </div>
       <div class="side">
@@ -692,7 +696,7 @@ async function patchRecord(patch) {
   const r = records.find(x => x.id === openRecordId); if (!r) return null;
   const { data, error } = await sb.from('rr_records').update(patch).eq('id', r.id).select().single();
   if (error) { toast('Could not save: ' + error.message, true); return null; }
-  Object.assign(r, data); return r;
+  Object.assign(r, data); normStep(r); return r;
 }
 async function saveField(k, value) {
   const r = records.find(x => x.id === openRecordId); if (!r) return;
@@ -731,7 +735,7 @@ async function moveStep(dir, to) {
     await logEvent(r.id, 'step', (dir < 0 ? 'Moved back to ' : 'Moved to ') + target);
     recTab = STEP_TAB[target] || recTab;
     await loadEvents(r.id); renderRecord(true);
-    toast('Now at ' + target);
+    toast('Now at ' + stepName(target));
   }
 }
 function skipQuote() { moveStep(1, 'Repair'); }
@@ -934,8 +938,8 @@ function secStatus(r, s) {
 }
 
 function renderTabs(r) {
-  const avail = { 'Assessment': true, 'Work performed': true, 'Testing': true, 'QC': true, 'Report': true };
-  return `<div class="tabs" style="margin-bottom:0;">${['Assessment', 'Work performed', 'Testing', 'QC', 'Report'].map(t =>
+  const avail = { 'Assessment': true, [RT_TAB]: true, 'QC': true, 'Report': true };
+  return `<div class="tabs" style="margin-bottom:0;">${['Assessment', RT_TAB, 'QC', 'Report'].map(t =>
     `<button class="tab ${recTab === t ? 'on' : ''}" ${avail[t] ? `onclick="recTab='${t}';renderRecord(true)"` : 'disabled title="Coming in a later install"'}>${t}${STEP_TAB[r.step] === t ? '<span class="here" title="Current step"></span>' : ''}</button>`).join('')}</div>`;
 }
 function renderAssessment(r) {
@@ -1007,7 +1011,7 @@ function toggleSec(id) { openSecs.has(id) ? openSecs.delete(id) : openSecs.add(i
 function setOpt(id, key, val) { const r = curRec(); const d = secData(r, id); d.v[key] = d.v[key] === val ? null : val; scheduleSave(); rerenderSec(id); refreshProgress(); }
 function toggleMulti(id, key, val) { const r = curRec(); const d = secData(r, id); const a = Array.isArray(d.v[key]) ? d.v[key] : []; d.v[key] = a.includes(val) ? a.filter(x => x !== val) : a.concat(val); scheduleSave(); rerenderSec(id); refreshProgress(); }
 function setVal(id, key, val) { const r = curRec(); secData(r, id).v[key] = val; scheduleSave(); if (/_other$/.test(key)) refreshProgress(); }
-function setNotes(id, which, val) { notesObj(id)[which] = val; scheduleSave(); const b = document.getElementById('w-done'); if (b && id === 'W') b.disabled = !String(workOf(curRec()).text || workOf(curRec()).raw || '').trim(); }
+function setNotes(id, which, val) { notesObj(id)[which] = val; scheduleSave(); if (id === 'W') refreshTestDone(); }
 function addPart() { const r = curRec(); const d = secData(r, 'H'); d.v.parts = (Array.isArray(d.v.parts) ? d.v.parts : []).concat({ qty: 1, desc: '', pn: '' }); scheduleSave(); rerenderSec('H'); }
 function setPart(i, k, v) { const r = curRec(); const d = secData(r, 'H'); if (d.v.parts && d.v.parts[i]) { d.v.parts[i][k] = v; scheduleSave(); } }
 function removePart(i) { const r = curRec(); const d = secData(r, 'H'); (d.v.parts || []).splice(i, 1); scheduleSave(); rerenderSec('H'); }
@@ -1076,7 +1080,7 @@ function photosHtml(sec) {
     <button class="phx" onclick="deletePhoto('${p.id}')" aria-label="Delete photo">×</button></div>`).join('');
 }
 function refreshPhotoAreas() { SECTIONS.map(s => s.id).concat(EXTRA_PHOTO_SECS.map(x => x[0])).forEach(id => { const el = document.getElementById('ph-' + id); if (el) el.innerHTML = photosHtml(id); });
-  if (view === 'record' && recTab === 'Testing' && !typing()) renderRecord(true); const pl = document.getElementById('phone-list'); if (pl) pl.innerHTML = photosHtml(phoneSec()); }
+  if (view === 'record' && recTab === RT_TAB && !typing()) renderRecord(true); const pl = document.getElementById('phone-list'); if (pl) pl.innerHTML = photosHtml(phoneSec()); }
 function resizeImage(file) {
   return new Promise(resolve => {
     const img = new Image();
@@ -1243,15 +1247,11 @@ function photoBlock(sec, label) {
 function renderWork(r) {
   const w = workOf(r);
   const est = ((asOf(r).H || {}).v || {}).parts || [];
-  return `<div class="bar" style="justify-content:space-between;"><span>${r.repaired_at ? `Repair marked done by <b>${esc(nameOf(r.repaired_by))}</b> on ${fmtDate(r.repaired_at)}` : 'Describe what was done. It goes on the Service Report.'}</span><span class="note" id="as-status">Saves automatically</span></div>
-    <div class="card" style="display:flex;flex-direction:column;gap:8px;"><h2>What was done</h2>${notesBlock('W', 'Your notes (what you did)')}</div>
+  return `<div class="card" style="display:flex;flex-direction:column;gap:8px;"><h2>What was done</h2>${notesBlock('W', 'Your notes (what you did)')}</div>
     <div class="card" style="display:flex;flex-direction:column;gap:8px;"><div class="bar" style="justify-content:space-between;"><h2>Parts used</h2>${est.length ? `<button class="btn sm" onclick="copyEstimateParts()">Copy from the estimate (H)</button>` : ''}</div>
       <div id="w-parts">${w.parts.map((p, i) => workPartRow(p, i)).join('') || '<span class="note">No parts yet.</span>'}</div>
       <div><button class="btn sm" onclick="addWorkPart()">Add part</button></div></div>
-    <div class="card">${photoBlock('W', 'Photos of the work (optional)')}</div>
-    <div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Finish the repair</b>
-      <span class="note">${String(w.text || w.raw || '').trim() ? 'Ready.' : 'Add a description of the work first.'}</span>
-      <div class="bar"><button class="btn primary" ${String(w.text || w.raw || '').trim() ? '' : 'disabled'} id="w-done" onclick="finishWork()">Repair done → Testing</button></div></div>`;
+    <div class="card">${photoBlock('W', 'Photos of the work (optional)')}</div>`;
 }
 function workPartRow(p, i) {
   return `<div class="prow"><input type="number" min="1" value="${esc(p.qty || 1)}" oninput="setWorkPart(${i},'qty',this.value)" aria-label="Quantity" style="max-width:80px;">
@@ -1267,13 +1267,6 @@ function copyEstimateParts() {
   if (w.parts.length && !confirm('Add the estimate’s parts to the list?')) return;
   est.forEach(p => w.parts.push({ qty: p.qty || 1, desc: p.desc || '', pn: p.pn || '', auto: !!p.auto }));
   scheduleSave(); redrawWorkParts();
-}
-async function finishWork() {
-  const r = curRec(); if (!r) return;
-  if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
-  const patch = { repaired_by: me, repaired_at: new Date().toISOString() };
-  if (Math.max(0, STEPS.indexOf(r.step)) < STEPS.indexOf('Testing')) { const st = Object.assign({}, r.step_times || {}); st.Repair = st.Repair || patch.repaired_at; st.Testing = patch.repaired_at; patch.step = 'Testing'; patch.step_times = st; }
-  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Repair done' + (patch.step ? ', moved to Testing' : '')); await loadEvents(r.id); recTab = STEP_TAB[r.step] || 'Testing'; renderRecord(true); window.scrollTo(0, 0); toast('Repair marked done'); }
 }
 
 // ── TESTING ─────────────────────────────────────────────
@@ -1320,17 +1313,36 @@ function stdText(std) {
 }
 function renderTesting(r) {
   const t = testsOf(r);
-  let h = `<div class="bar" style="justify-content:space-between;"><span>${r.tested_at ? `Testing marked done by <b>${esc(nameOf(r.tested_by))}</b> on ${fmtDate(r.tested_at)}` : 'Drop the chrono screenshot on a string. The shots are read for you.'}</span><span class="note" id="as-status">Saves automatically</span></div>`;
+  let h = `<h2 style="margin-top:6px;">Testing</h2><p class="note" style="margin:0;">Drop the chrono screenshot on a string. The shots are read for you.</p>`;
   if (!t.strings.length) t.strings.push(newString());
   h += t.strings.map((s, i) => `<div class="card" id="str-${i}">${stringInner(r, s, i)}</div>`).join('');
   h += `<div><button class="btn" onclick="addString()">Add another string</button></div>`;
   const unassigned = photos.filter(p => p.section === 'Chrono' && !t.strings.some(s => s.photo === p.path));
   if (unassigned.length) h += `<div class="card"><h2>Screenshots from a phone</h2><p class="note">Pick which string each one belongs to. It is read automatically.</p><div class="phs">${unassigned.map(p => `<div style="display:flex;flex-direction:column;gap:6px;"><div class="ph"><img src="${esc(photoUrls[p.path] || '')}" alt="Chrono screenshot"></div>${t.strings.map((s, i) => `<button class="btn sm" onclick="useScreenshot('${p.id}',${i})">Use for string ${i + 1}</button>`).join('')}</div>`).join('')}</div></div>`;
   h += `<div class="card" id="acc">${accuracyInner(r)}</div>`;
-  const rd = testsReady(r);
-  h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Finish testing</b><span class="note" id="t-why">${rd.ok ? 'Ready.' : esc(rd.why)}</span>
-    <div class="bar"><button class="btn primary" id="t-done" ${rd.ok ? '' : 'disabled'} onclick="finishTesting()">Testing done → QC</button></div></div>`;
   return h;
+}
+// ── REPAIR & TESTING (one tab, one step; same tech does both) ──
+function rtReady(r) {
+  if (!String(workOf(r).text || workOf(r).raw || '').trim()) return { ok: false, why: 'Describe what was done first.' };
+  return testsReady(r);
+}
+function renderRepairTesting(r) {
+  const k = rtReady(r);
+  const done = r.repaired_at && r.tested_at;
+  return `<div class="bar" style="justify-content:space-between;"><span>${done ? `Repair &amp; testing marked done by <b>${esc(nameOf(r.tested_by || r.repaired_by))}</b> on ${fmtDate(r.tested_at || r.repaired_at)}` : 'What was done, then the test results. The work and test results go on the Service Report.'}</span><span class="note" id="as-status">Saves automatically</span></div>
+    <h2 style="margin-top:6px;">Repair</h2>${renderWork(r)}${renderTesting(r)}
+    <div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Finish repair &amp; testing</b><span class="note" id="t-why">${k.ok ? 'Ready.' : esc(k.why)}</span>
+      <div class="bar"><button class="btn primary" id="t-done" ${k.ok ? '' : 'disabled'} onclick="finishRepairTesting()">Repair &amp; testing done → QC</button></div></div>`;
+}
+async function finishRepairTesting() {
+  const r = curRec(); if (!r) return;
+  const k = rtReady(r); if (!k.ok) return toast(k.why, true);
+  if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
+  const now = new Date().toISOString();
+  const patch = { repaired_by: me, repaired_at: now, tested_by: me, tested_at: now };
+  if (Math.max(0, STEPS.indexOf(r.step)) < STEPS.indexOf('QC')) { const st = Object.assign({}, r.step_times || {}); st.Repair = st.Repair || now; st.QC = now; patch.step = 'QC'; patch.step_times = st; }
+  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Repair & testing done' + (patch.step ? ', moved to QC' : '')); recTab = STEP_TAB[r.step] || 'QC'; await loadEvents(r.id); renderRecord(true); window.scrollTo(0, 0); toast('Repair & testing marked done'); }
 }
 function newString() { return { id: Math.random().toString(36).slice(2, 8), pellet: '', grains: '', reg_bar: '', power: '', shots: [], unsure: [], photo: null }; }
 function stringInner(r, s, i) {
@@ -1382,7 +1394,7 @@ function testsReady(r) {
   if (String(t.accuracy.group_in || '').trim() && !t.accuracy.result) return { ok: false, why: 'Make the Pass/Fail call on the accuracy test.' };
   return { ok: true };
 }
-function refreshTestDone() { const r = curRec(), b = document.getElementById('t-done'), n = document.getElementById('t-why'); if (!r || !b) return; const k = testsReady(r); b.disabled = !k.ok; if (n) n.textContent = k.ok ? 'Ready.' : k.why; }
+function refreshTestDone() { const r = curRec(), b = document.getElementById('t-done'), n = document.getElementById('t-why'); if (!r || !b) return; const k = rtReady(r); b.disabled = !k.ok; if (n) n.textContent = k.ok ? 'Ready.' : k.why; }
 function redrawStats(i) { const r = curRec(), s = testsOf(r).strings[i], el = document.getElementById('stats-' + i); if (!el || !s) return; const std = standardFor(r, s.pellet); const st = stats(s.shots || [], s.grains || (std && std.grains)); el.innerHTML = statsHtml(st, verdict(st, std), s); const c = document.getElementById('call-' + i); if (c) c.innerHTML = callHtml(i, s, st); refreshTestDone(); }
 function redrawString(i) { const r = curRec(), el = document.getElementById('str-' + i); if (el) el.innerHTML = stringInner(r, testsOf(r).strings[i], i); redrawStats(i); }
 function setShot(i, k, val) { const s = testsOf(curRec()).strings[i]; s.shots = s.shots || []; s.shots[k] = String(val).trim() === '' ? null : String(val).trim(); while (s.shots.length && (s.shots[s.shots.length - 1] == null)) s.shots.pop(); s.unsure = (s.unsure || []).filter(x => x !== k); scheduleSave(); redrawStats(i); }
@@ -1444,14 +1456,6 @@ function accuracyInner(r) {
 }
 function setAccResult(x) { const r = curRec(), a = testsOf(r).accuracy; a.result = a.result === x ? null : x; scheduleSave(); const el = document.getElementById('acc'); if (el) el.innerHTML = accuracyInner(r); refreshTestDone(); }
 function setAcc(k, v) { const r = curRec(); testsOf(r).accuracy[k] = v; scheduleSave(); if (k === 'group_in') { const el = document.getElementById('acc'); const y = window.scrollY; if (el) { const f = document.activeElement && document.activeElement.getAttribute('oninput'); el.innerHTML = accuracyInner(r); refreshTestDone(); const again = f && el.querySelector(`[oninput="${f}"]`); if (again) { again.focus(); const L = again.value.length; try { again.setSelectionRange(L, L); } catch (e) {} } window.scrollTo(0, y); } } }
-async function finishTesting() {
-  const r = curRec(); if (!r) return;
-  const k = testsReady(r); if (!k.ok) return toast(k.why, true);
-  if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
-  const patch = { tested_by: me, tested_at: new Date().toISOString() };
-  if (Math.max(0, STEPS.indexOf(r.step)) < STEPS.indexOf('QC')) { const st = Object.assign({}, r.step_times || {}); st.Testing = st.Testing || patch.tested_at; st.QC = patch.tested_at; patch.step = 'QC'; patch.step_times = st; }
-  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Testing done' + (patch.step ? ', moved to QC' : '')); recTab = STEP_TAB[r.step] || 'QC'; await loadEvents(r.id); renderRecord(true); window.scrollTo(0, 0); toast('Testing marked done'); }
-}
 
 // ── QC ──────────────────────────────────────────────────
 function qcOf(r) { if (!r.qc || typeof r.qc !== 'object') r.qc = {}; if (!r.qc.checks) r.qc.checks = {}; return r.qc; }
@@ -1460,7 +1464,7 @@ function renderQC(r) {
   const before = STEPS.indexOf(r.step) < STEPS.indexOf('QC');
   const same = r.repaired_by && r.repaired_by === me;
   let h = `<div class="bar" style="justify-content:space-between;"><span>${r.qc_at ? `QC passed by <b>${esc(fullName(r.qc_by))}</b> on ${fmtDate(r.qc_at)}` : 'Final check before the rifle goes back. Internal only: none of this goes on the report except who signed off.'}</span><span class="note" id="as-status">Saves automatically</span></div>`;
-  if (before) h += `<div class="holdbox"><b>Testing isn’t finished yet.</b><span class="note" style="color:var(--warn);">You can look through the checklist, but QC can only be signed off once the record reaches QC.</span></div>`;
+  if (before) h += `<div class="holdbox"><b>Repair &amp; testing isn’t finished yet.</b><span class="note" style="color:var(--warn);">You can look through the checklist, but QC can only be signed off once the record reaches QC.</span></div>`;
   h += `<div class="card"><h2 style="margin-bottom:4px;">Checklist</h2>` + QC_CHECKS.map(([k, label]) =>
     `<label class="qcrow"><input type="checkbox" ${q.checks[k] ? 'checked' : ''} onchange="setQc('${k}', this.checked)"><span>${esc(label)}</span></label>`).join('') +
     `<label class="l" style="margin-top:12px;">QC notes (internal)<textarea oninput="setQcNote(this.value)" placeholder="Anything worth noting">${esc(q.notes || '')}</textarea></label></div>`;
@@ -1510,7 +1514,7 @@ async function saveFailQc() {
   const r = curRec(); if (!r) return;
   const q = qcOf(r); q.checks = {}; q.notes = (q.notes ? q.notes + '\n' : '') + 'QC failed ' + fmtDate(new Date().toISOString()) + ': ' + why;
   const patch = { step: 'Repair', qc: q, qc_by: null, qc_at: null, repaired_at: null, repaired_by: null, tested_at: null, tested_by: null };
-  if (await patchRecord(patch)) { await logEvent(r.id, 'qc', 'QC failed, back to Repair: ' + why); await loadEvents(r.id); recTab = 'Work performed'; renderRecord(true); toast('Sent back to Repair'); }
+  if (await patchRecord(patch)) { await logEvent(r.id, 'qc', 'QC failed, back to Repair & testing: ' + why); await loadEvents(r.id); recTab = RT_TAB; renderRecord(true); toast('Sent back to Repair & testing'); }
 }
 
 // ── SERVICE REPORT ──────────────────────────────────────
