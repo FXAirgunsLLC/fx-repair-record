@@ -27,7 +27,7 @@ body{background:var(--steel);color:var(--ink);font-family:Barlow,Arial,sans-seri
 .wrap{max-width:560px;margin:0 auto;padding:28px 18px 48px}
 .logo{height:30px;display:block;margin-bottom:34px}
 h1{font-family:'Barlow Condensed',Arial Narrow,sans-serif;font-weight:700;font-size:44px;line-height:1.02;letter-spacing:-.01em}
-h1 .rifle{display:block;font-size:56px}
+h1 .rifle{color:var(--pick)}
 .lede{color:var(--slate);margin:14px 0 28px;max-width:44ch}
 .panel{background:var(--panel);border-radius:14px;padding:6px 22px 24px;border:1px solid var(--line)}
 fieldset{border:0;padding:22px 0 20px;border-bottom:1px solid var(--line)}
@@ -54,7 +54,18 @@ textarea:focus{border-color:var(--pick);outline:none}
 .done h1{font-size:48px}
 .note{color:var(--slate);font-size:15px;margin-top:22px}
 .skeleton{color:var(--slate)}
-@media (max-width:420px){h1{font-size:38px}h1 .rifle{font-size:46px}.panel{padding:4px 16px 20px}.scale button{flex-basis:calc(16.66% - 8px)}}
+@media (max-width:420px){h1{font-size:38px}.panel{padding:4px 16px 20px}.scale button{flex-basis:calc(16.66% - 8px)}}
+/* Computers: headline on the left, questions on the right (same layout as the status page) */
+@media (min-width:880px){
+  .wrap{max-width:1080px;padding:56px 40px 64px}
+  .logo{margin-bottom:56px}
+  .cols{display:grid;grid-template-columns:minmax(0,4fr) minmax(0,7fr);gap:64px;align-items:start}
+  .intro{position:sticky;top:40px}
+  h1{font-size:54px}
+  .lede{font-size:19px}
+  .panel{padding:10px 32px 30px}
+  .done{max-width:640px}
+}
 @media (prefers-reduced-motion:no-preference){.send,.opt button{transition:background-color .12s,border-color .12s,color .12s}}
 </style>
 </head>
@@ -88,10 +99,17 @@ function choice(key, label, n, opts) {
     <div class="opt" role="group">${opts.map(o => `<button type="button" data-k="${key}" data-v="${esc(o)}" aria-pressed="false">${esc(o)}</button>`).join('')}</div></fieldset>`;
 }
 
+// "Shyam, your Impact M3" / "Your rifle": one even line, the model highlighted when known
+function headline() {
+  const m = String(who.model || '').replace(/^FX\s+/i, '').trim();
+  const thing = m && m.toLowerCase() !== 'rifle' ? `<span class="rifle">${esc(m)}</span>` : 'rifle';
+  return (who.first ? esc(who.first) + ', your ' : 'Your ') + thing;
+}
 function form() {
   app.innerHTML = `${LOGO}
-    <h1>${who.first ? esc(who.first) + ', your' : 'Your'}<span class="rifle">${esc(who.model.replace(/^FX\s+/i, ''))}</span>is back. How did we do?</h1>
-    <p class="lede">Seven quick questions about your repair. Your answers go straight to our service team.</p>
+    <div class="cols"><div class="intro">
+    <h1>${headline()} is back. How did we do?</h1>
+    <p class="lede">Seven quick questions about your repair. Your answers go straight to our service team.</p></div>
     <form class="panel" id="f" novalidate>
       ${stars('overall', 'Overall, how satisfied are you with your repair?', 1)}
       ${choice('fixed', 'Is the problem you sent the rifle in for fixed?', 2, ['Yes', 'Partly', 'No'])}
@@ -105,7 +123,7 @@ function form() {
         <textarea id="comment" maxlength="3000" aria-label="Anything else you’d like to tell us"></textarea></fieldset>
       <button class="send" id="send" type="submit">Send my answers</button>
       <p class="err" id="err" role="alert"></p>
-    </form>`;
+    </form></div>`;
   document.getElementById('f').addEventListener('click', e => {
     const b = e.target.closest('button[data-k]'); if (!b) return;
     const k = b.dataset.k, v = b.dataset.v;
