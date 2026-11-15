@@ -27,7 +27,7 @@ body{background:var(--steel);color:var(--ink);font-family:Barlow,Arial,sans-seri
 .wrap{max-width:560px;margin:0 auto;padding:28px 18px 48px}
 .logo{height:30px;display:block;margin-bottom:34px}
 h1{font-family:'Barlow Condensed',Arial Narrow,sans-serif;font-weight:700;font-size:44px;line-height:1.02;letter-spacing:-.01em}
-h1 .rifle{display:block;font-size:56px}
+h1 .rifle{color:var(--pick)}
 .lede{color:var(--slate);margin:14px 0 24px;max-width:44ch}
 .panel{background:var(--panel);border-radius:14px;padding:22px;border:1px solid var(--line)}
 .hold{background:var(--hold-bg);color:var(--hold);border-radius:10px;padding:12px 14px;margin-bottom:18px;font-weight:600}
@@ -51,13 +51,13 @@ li.now .st{font-family:'Barlow Condensed',sans-serif;font-size:24px;line-height:
 .track a:focus-visible{outline:3px solid var(--pick);outline-offset:2px}
 .help{color:var(--slate);font-size:15px;margin-top:22px}
 .help.wide{display:none}
-@media (max-width:420px){h1{font-size:38px}h1 .rifle{font-size:46px}.panel{padding:18px 16px}}
+@media (max-width:420px){h1{font-size:38px}.panel{padding:18px 16px}}
 @media (min-width:880px){
   .wrap{max-width:1040px;padding:56px 40px 64px}
   .logo{margin-bottom:56px}
   .cols{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:64px;align-items:start}
   .intro{position:sticky;top:40px}
-  h1{font-size:56px}h1 .rifle{font-size:76px}
+  h1{font-size:56px}
   .lede{font-size:19px}
   .panel{padding:30px 32px}
   .help.wide{display:block}.help.narrow{display:none}
@@ -78,6 +78,12 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ 
 function day(iso) { return iso ? new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : ''; }
 function message(title, text) { app.innerHTML = `${LOGO}<h1>${esc(title)}</h1><p class="lede">${esc(text)}</p>`; }
 
+// "Shyam, your Impact M3 repair" / "Your rifle repair": one even line, the model highlighted when known
+function headline(d) {
+  const m = String(d.model || '').replace(/^FX\s+/i, '').trim();
+  const thing = m && m.toLowerCase() !== 'rifle' ? `<span class="rifle">${esc(m)}</span>` : 'rifle';
+  return (d.first ? esc(d.first) + ', your ' : 'Your ') + thing;
+}
 function show(d) {
   const now = d.stages.find(s => s.now) || d.stages[0];
   const lede = now.name === 'Delivered' ? (d.pickup ? 'You’ve picked up your rifle. Thank you for choosing FX Airguns.' : 'Your rifle has been delivered. Thank you for choosing FX Airguns.')
@@ -89,7 +95,7 @@ function show(d) {
   const rename = { 'Delivered': 'Picked up', 'Ready to ship': 'Ready for pickup' };
   const stages = d.pickup ? d.stages.filter(s => s.name !== 'Shipped').map(s => rename[s.name] ? Object.assign({}, s, { name: rename[s.name] }) : s) : d.stages;
   app.innerHTML = `${LOGO}<div class="cols"><div class="intro">
-    <h1>${d.first ? esc(d.first) + ', your' : 'Your'}<span class="rifle">${esc(String(d.model || 'rifle').replace(/^FX\s+/i, ''))}</span>repair</h1>
+    <h1>${headline(d)} repair</h1>
     <p class="lede">${esc(lede)}</p>
     <p class="help wide">${help}</p></div>
     <section class="panel" aria-label="Repair progress">
