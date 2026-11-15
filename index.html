@@ -312,6 +312,10 @@ function clockOf(r) {
   const day = Math.max(1, Math.floor((end - start) / DAY) + 1);
   return { day, due: new Date(start + CLOCK_DAYS * DAY), late: day > CLOCK_DAYS, warn: day >= 10 && day <= CLOCK_DAYS, done: r.step === 'Shipped' };
 }
+function siblingsHtml(r) {
+  const sib = r.freshdesk_ticket ? records.filter(x => x.id !== r.id && x.freshdesk_ticket === r.freshdesk_ticket) : [];
+  return sib.length ? `<div class="note" style="margin-top:4px;">Also on ticket #${esc(r.freshdesk_ticket)}: ${sib.map(x => `<a href="#" onclick="event.preventDefault();openRecord('${x.id}')">${esc(x.customer_name || 'repair')}${x.model ? ' · ' + esc(x.model) : ''}${x.serial_number ? ' (SN ' + esc(x.serial_number) + ')' : ''}</a>`).join(', ')}</div>` : '';
+}
 function recordFor(t) { return records.find(r => String(r.repair_ticket_id) === String(t.id)); }
 
 // ── DATA ────────────────────────────────────────────────
@@ -408,6 +412,52 @@ async function loadHoldEvents() {
   const { data } = await sb.from('rr_events').select('record_id,kind,text,minutes,at').in('kind', ['hold', 'resume']);
   holdEvents = data || [];
 }
+// Every repair and survey to Excel: Repairs (one row each), Parts used (one row per part), Surveys.
+// Internal file: includes the safety check, holds and QC. Never includes prices (the app has none).
+function xDate(iso) { return iso ? isoToDate(iso) : ''; }
+function exportExcel() {
+  if (typeof XLSX === 'undefined') return toast('The Excel tool did not load. Refresh the page and try again.', true);
+  const svBy = {}; surveys.forEach(x => { svBy[x.record_id] = x; });
+  const all = records.slice().sort((a, b) => String(a.received_at || a.created_at || '').localeCompare(String(b.received_at || b.created_at || '')));
+  const repairs = all.map(r => {
+    const a = asOf(r), S = (a.S || {}), w = workOf(r), t = testsOf(r), sv = svBy[r.id] || {}, c = clockOf(r);
+    const lastSafety = (S.history || [])[(S.history || []).length - 1];
+    const strings = t.strings.filter(x => (x.shots || []).some(v => v != null && v !== ''));
+    const shotsAll = strings.map(x => x.shots.filter(v => v != null && v !== '').map(Number)).flat().filter(n => isFinite(n));
+    return {
+      'Ticket #': r.freshdesk_ticket ? Number(r.freshdesk_ticket) : '', 'Customer': r.customer_name || '', 'Email': r.email || '', 'Phone': r.phone || '',
+      'Model': r.model || '', 'Serial': r.serial_number || '', 'Caliber': r.caliber || '', 'Barrel': r.barrel_length || '', 'Warranty': r.warranty || '',
+      'Test record': r.is_test ? 'Yes' : 'No', 'Received': xDate(r.received_at), 'Step': stepName(r.step || 'Received'), 'On hold': r.hold_reason || '',
+      'Days (received to shipped, or so far)': c ? c.day : '', 'Past 14 days': c ? (c.late ? 'Yes' : 'No') : '',
+      'Safety check': !S.status ? '' : (S.history || []).length ? 'Concern found' + (lastSafety && lastSafety.lifted_at ? ' (hold lifted)' : ' (on hold)') : 'No concern',
+      'Safety notes': (S.history || []).map(x => x.note + (x.lifted_at ? ' → ' + (x.approver || '') + ': ' + (x.decision || '') : '')).join(' | '),
+      'Reported issue': r.issue || '', 'Overall assessment': ((a.G || {}).v || {}).overall || '', 'Assessed by': fullName(r.assessed_by), 'Assessed': xDate(r.assessed_at),
+      'Repair notes (internal)': ((a.H || {}).v || {}).notes || '',
+      'Work done (customer)': w.text || w.raw || '', 'Parts used': w.parts.map(p => (p.qty || 1) + ' x ' + [p.pn, p.desc].filter(Boolean).join(' ')).join('; '),
+      'Repaired & tested by': fullName(r.tested_by || r.repaired_by), 'Repaired & tested': xDate(r.tested_at || r.repaired_at),
+      'Velocity strings': strings.length, 'Avg velocity (fps)': shotsAll.length ? Math.round(shotsAll.reduce((x, y) => x + y, 0) / shotsAll.length * 10) / 10 : '',
+      'Accuracy group (in)': t.accuracy.group_in || '', 'Accuracy result': t.accuracy.result || '',
+      'QC by': fullName(r.qc_by), 'QC passed': xDate(r.qc_at), 'Report sent': xDate(r.report_sent_at),
+      'Return carrier': r.ship_carrier || '', 'Return tracking': r.return_tracking || '', 'Shipped': xDate(r.shipped_at || (r.step_times || {}).Shipped), 'Delivered': xDate(r.delivered_at),
+      'Survey sent': xDate(sv.sent_at), 'Survey answered': xDate(sv.responded_at), 'Survey overall (1-5)': sv.overall ?? '', 'Recommend (0-10)': sv.nps ?? ''
+    };
+  });
+  const partRows = [];
+  all.forEach(r => workOf(r).parts.forEach(p => partRows.push({ 'Ticket #': r.freshdesk_ticket ? Number(r.freshdesk_ticket) : '', 'Customer': r.customer_name || '', 'Model': r.model || '',
+    'Test record': r.is_test ? 'Yes' : 'No', 'Qty': Number(p.qty) || 1, 'Part #': p.pn || '', 'Description': p.desc || '', 'Repaired': xDate(r.tested_at || r.repaired_at) })));
+  const recBy = {}; records.forEach(r => { recBy[r.id] = r; });
+  const svRows = surveys.filter(x => x.sent_at || x.responded_at).map(x => { const r = recBy[x.record_id] || {}; return {
+    'Ticket #': r.freshdesk_ticket ? Number(r.freshdesk_ticket) : '', 'Customer': r.customer_name || '', 'Model': r.model || '', 'Test record': r.is_test ? 'Yes' : 'No',
+    'Sent': xDate(x.sent_at), 'Opened': xDate(x.opened_at), 'Answered': xDate(x.responded_at), 'Overall (1-5)': x.overall ?? '', 'Fixed': x.fixed || '',
+    'Performance': x.performance || '', 'Communication (1-5)': x.communication ?? '', 'Turnaround': x.turnaround || '', 'Recommend (0-10)': x.nps ?? '', 'Comment': x.comment || '' }; });
+  const wb = XLSX.utils.book_new();
+  const sheet = (rows, name, widths) => { const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ '': 'Nothing yet' }]); ws['!cols'] = widths.map(wch => ({ wch })); if (rows.length) ws['!autofilter'] = { ref: ws['!ref'] }; XLSX.utils.book_append_sheet(wb, ws, name); };
+  sheet(repairs, 'Repairs', Object.keys(repairs[0] || {}).map(k => /notes|Work done|Parts used|issue|Safety notes/i.test(k) ? 50 : Math.max(10, k.length + 2)));
+  sheet(partRows, 'Parts used', [10, 22, 18, 10, 6, 22, 40, 12]);
+  sheet(svRows, 'Surveys', [10, 22, 18, 10, 12, 12, 12, 12, 10, 18, 18, 12, 14, 60]);
+  XLSX.writeFile(wb, 'Repair Record export ' + isoToDate(new Date().toISOString()) + '.xlsx');
+  toast('Exported ' + repairs.length + ' repairs');
+}
 function daysBetween(a, b) { return (new Date(b).getTime() - new Date(a).getTime()) / DAY; }
 function renderDash(el) {
   if (!holdLoaded) { holdLoaded = true; loadHoldEvents().then(() => { if (listTab === 'dash' && view === 'list') renderRows(); }); }
@@ -436,7 +486,7 @@ function renderDash(el) {
   const risk = open.filter(r => clockOf(r).day >= 10).sort((a, b) => clockOf(b).day - clockOf(a).day);
   const pipeSteps = STEPS.filter(x => x !== 'Shipped');
   let h = `<div class="bar" style="justify-content:space-between;margin-bottom:12px;"><span class="note">Open repairs are shown whatever their date. Turnaround, step times and holds use repairs received in the period.</span>
-    <label class="l" style="flex-direction:row;align-items:center;gap:8px;">Period <select style="width:auto;" onchange="dashRange=this.value;renderRows()">${[['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['all', 'All time']].map(([v, l]) => `<option value="${v}" ${dashRange === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+    <span class="bar" style="gap:8px;"><button class="btn sm" onclick="exportExcel()">Export to Excel</button><label class="l" style="flex-direction:row;align-items:center;gap:8px;">Period <select style="width:auto;" onchange="dashRange=this.value;renderRows()">${[['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['all', 'All time']].map(([v, l]) => `<option value="${v}" ${dashRange === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></span></div>
   <div class="kpis"><div class="kpi"><b>${open.length}</b><span class="note">open repairs</span></div>
     <div class="kpi"><b style="color:${late.length ? 'var(--red)' : 'inherit'}">${late.length}</b><span class="note">past ${CLOCK_DAYS} days</span></div>
     <div class="kpi"><b>${onTime}</b><span class="note">shipped within ${CLOCK_DAYS} days (${turn.length} shipped)</span></div>
@@ -495,7 +545,9 @@ async function openFromTicket(ticketId) {
     row.step_times = row.received_at ? { Received: row.received_at } : {};
     const { data, error } = await sb.from('rr_records').insert(row).select().single();
     if (error) { if (error.code === '23505') { await loadAll(); r = recordFor(t); } else return toast('Could not start the record: ' + error.message, true); }
-    else { r = data; records.unshift(r); await logEvent(r.id, 'created', 'Repair Record started from Repair Queue card #' + (t.ticket_number || t.id)); prefill(r.id, true); }
+    else { r = data; records.unshift(r); await logEvent(r.id, 'created', 'Repair Record started from Repair Queue card #' + (t.ticket_number || t.id)); prefill(r.id, true);
+      const same = await sameTicketRepairs(r.freshdesk_ticket, r.id);
+      if (same.length) toast('Ticket #' + r.freshdesk_ticket + ' already has ' + same.length + ' other repair' + (same.length > 1 ? 's' : '') + '. They’re linked at the top of this one.'); }
   }
   openRecord(r.id);
 }
@@ -512,7 +564,17 @@ function openNewTest() {
   setTimeout(() => document.getElementById('n-ticket').focus(), 30);
 }
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
-async function createTest() {
+// Another repair already on this Freshdesk ticket? Ask first (it can be right: two rifles on one ticket).
+let pendingTest = null;
+async function sameTicketRepairs(ticket, exceptId) {
+  if (!ticket) return [];
+  const { data } = await sb.from('rr_records').select('id,customer_name,model,serial_number,step,created_at,is_test').eq('freshdesk_ticket', ticket);
+  const list = (data || records.filter(x => x.freshdesk_ticket === ticket)).filter(x => x.id !== exceptId);
+  return list.map(normStep);
+}
+function dupLine(x) { return `${esc(x.customer_name || 'Unknown customer')}${x.model ? ' · ' + esc(x.model) : ''}${x.serial_number ? ' · SN ' + esc(x.serial_number) : ''} <span class="note">(${esc(stepName(x.step || 'Received'))}, started ${fmtDate(x.created_at)}${x.is_test ? ', test' : ''})</span>`; }
+async function createTest(confirmed) {
+  if (confirmed === true && pendingTest) return createTestRow(pendingTest);
   const v = id => document.getElementById(id).value.trim();
   const row = { is_test: true, freshdesk_ticket: v('n-ticket').replace(/[^0-9]/g, '') || null, customer_name: v('n-cust') || null, model: cleanModel(v('n-model')) || null,
     serial_number: v('n-serial') || null, received_at: dateToIso(v('n-rec')), created_by: me, step: 'Received' };
@@ -520,8 +582,22 @@ async function createTest() {
   const sources = {}; ['customer_name', 'model', 'serial_number', 'freshdesk_ticket'].forEach(k => { if (row[k]) sources[k] = 'Typed in'; });
   row.sources = sources; row.step_times = row.received_at ? { Received: row.received_at } : {};
   document.getElementById('n-save').disabled = true;
+  const same = await sameTicketRepairs(row.freshdesk_ticket);
+  if (same.length) {
+    pendingTest = row;
+    document.getElementById('modal-body').innerHTML = `<h2>Ticket #${esc(row.freshdesk_ticket)} already has a repair</h2>
+      <p class="note">Open it to keep everything on one card. Only start another if this is a different rifle on the same ticket.</p>
+      <div style="display:flex;flex-direction:column;gap:8px;">${same.map(x => `<div class="bar" style="justify-content:space-between;"><span>${dupLine(x)}</span><button class="btn sm primary" onclick="closeModal();openRecord('${x.id}')">Open this one</button></div>`).join('')}</div>
+      <div class="bar" style="margin-top:12px;"><button class="btn" onclick="createTest(true)">Start another (different rifle)</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
+    return;
+  }
+  return createTestRow(row);
+}
+async function createTestRow(row) {
+  pendingTest = null;
+  const btn = document.getElementById('n-save'); if (btn) btn.disabled = true;
   const { data, error } = await sb.from('rr_records').insert(row).select().single();
-  if (error) { document.getElementById('n-save').disabled = false; return toast('Could not create it: ' + error.message, true); }
+  if (error) { if (btn) btn.disabled = false; return toast('Could not create it: ' + error.message, true); }
   records.unshift(data); closeModal();
   await logEvent(data.id, 'created', 'Test repair created');
   listTab = 'test';
@@ -598,7 +674,7 @@ function renderRecord(keepScroll) {
   const next = STEPS[si + 1];
   let h = `<div class="bar" style="justify-content:space-between;">
       <div><a href="#" onclick="backToList();return false;" style="color:var(--teal);font-size:13px;text-decoration:none;">← Repairs</a>
-      <h1>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) + ' · ' : ''}${esc(r.customer_name || 'Unknown customer')}${r.model ? ' · ' + esc(r.model) : ''} ${r.is_test ? '<span class="pill test" style="vertical-align:middle;">TEST</span>' : ''}</h1></div>
+      <h1>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) + ' · ' : ''}${esc(r.customer_name || 'Unknown customer')}${r.model ? ' · ' + esc(r.model) : ''} ${r.is_test ? '<span class="pill test" style="vertical-align:middle;">TEST</span>' : ''}</h1>${siblingsHtml(r)}</div>
       <div class="bar">${r.report_sent_at ? `<span class="pill step">Report sent ${fmtDate(r.report_sent_at)}</span>` : ''}<button class="btn" onclick="recTab='Report';renderRecord(true)">Service Report</button></div>
     </div>
     <div class="card" style="margin-top:14px;">
