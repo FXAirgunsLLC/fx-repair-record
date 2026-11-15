@@ -1900,13 +1900,16 @@ async function lbCheck() {
   try {
     const out = await api('/ship/validate-address', { address: lbVals().address });
     if (!out.found) { m.textContent = out.note || 'FedEx could not check it.'; return; }
+    // Only take FedEx's version of the address when FedEx confirmed it; otherwise keep what was typed
     const x = out.address, set = (id, v) => { const el = document.getElementById('lb-' + id); if (el && v) el.value = v; };
-    const before = JSON.stringify(lbVals().address);
-    set('s1', x.street1); set('s2', x.street2); set('city', x.city); set('st', x.state); set('zip', x.zip);
-    const changed = before !== JSON.stringify(lbVals().address);
+    const norm = a => JSON.stringify([a.street1, a.street2, a.city, a.state, String(a.zip).slice(0, 5)].map(v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '')));
+    const before = norm(lbVals().address);
+    if (out.resolved) { set('s1', x.street1); set('s2', x.street2); set('city', x.city); set('st', x.state); set('zip', x.zip); }
+    const changed = out.resolved && before !== norm(lbVals().address);
     if (out.residential != null) lbSetRes(out.residential);
-    m.textContent = (out.resolved ? '✓ FedEx knows this address' : 'FedEx couldn’t fully confirm it. Double-check it') + (changed ? ', and tidied it up' : '') + '.' +
-      (out.residential === true ? ' It’s a home.' : out.residential === false ? ' It’s a business.' : ' FedEx can’t tell if it’s a home or a business. Pick one.');
+    m.textContent = (out.resolved ? '✓ FedEx confirmed this address' + (changed ? ' and corrected it. Look over the change' : '') + '.'
+        : 'FedEx couldn’t confirm it, so it was left as typed. Double-check it.' + (out.test ? ' (FedEx’s test system can’t confirm real addresses; this works with the real keys.)' : '')) +
+      (out.residential === true ? ' It’s a home.' : out.residential === false ? ' It’s a business.' : ' Pick Home or Business.');
     lbChanged();
   } catch (e) { m.textContent = 'Could not check it (' + e.message + '). You can still make the label.'; }
   finally { b.disabled = false; }
