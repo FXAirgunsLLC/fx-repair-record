@@ -235,7 +235,7 @@ const STANDARDS_ON = false;
 // The tab always follows the step
 const STEP_TAB = { 'Received': 'Assessment', 'Assessment': 'Assessment', 'Quote': 'Assessment', 'Repair': RT_TAB, 'QC': 'QC', 'Ready to ship': 'Report', 'Shipped': 'Report' };
 // Steps that move on only with the "done" button inside their tab (so who/when is recorded)
-const DONE_IN_TAB = { 'Assessment': 'Finish it with the button at the bottom of the Assessment tab.', 'Repair': 'Finish it at the bottom of the Repair & testing tab.', 'QC': 'Sign off at the bottom of the QC tab.', 'Ready to ship': 'Add the tracking # under Return shipment and send the report. Shipped is stamped from FedEx.' };
+const DONE_IN_TAB = { 'Assessment': 'Finish it with the button at the bottom of the Assessment tab.', 'Repair': 'Finish it at the bottom of the Repair & testing tab.', 'QC': 'Sign off at the bottom of the QC tab.', 'Ready to ship': 'Add the tracking # (or create a label) under Return shipment and send the report. Shipped is stamped from tracking.' };
 const CARRIERS = ['FedEx', 'UPS', 'USPS', 'Other', 'Customer pickup'];
 const SURVEY_DAYS = 5;
 function trackUrl(carrier, n) {
@@ -333,8 +333,6 @@ async function loadAll() {
   const sv = await sb.from('rr_surveys').select('*').order('created_at', { ascending: false });
   surveys = sv.error ? [] : (sv.data || []);
   if (!partsLoaded) loadParts();
-  const sf = await sb.from('rr_ship_from').select('*').order('sort', { ascending: true }).order('id', { ascending: true });
-  shipFrom = sf.error ? [] : (sf.data || []);
   syncReceivedDates();
 }
 // Received date from the Repair Queue's Arrived date (Inbound stamps it when FedEx delivers).
@@ -1783,27 +1781,28 @@ function shipBox(r) {
   const carrier = r.ship_carrier || 'FedEx', pickup = carrier === 'Customer pickup';
   if (!atShip && !r.return_tracking) return `<div class="card"><h2>Return shipment</h2><p class="note" style="margin-top:6px;">Opens once QC has passed.</p></div>`;
   const url = trackUrl(carrier, r.return_tracking);
+  const hasLabel = !!(r.return_tracking && (r.ship_label_id || r.ship_label_path));
+  // FedEx is tracked by FedEx; UPS and USPS labels made here are tracked through ShipStation
+  const autoTrack = carrier === 'FedEx' || (['UPS', 'USPS'].includes(carrier) && !!r.ship_label_id);
   const line = (k, v) => v ? `<span><b>${k}</b>${v}</span>` : '';
   return `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><div class="bar" style="justify-content:space-between;"><h2>Return shipment</h2>
       ${labelButtons(r)}</div>
-    ${r.ship_label_path && r.return_tracking ? labelLine(r) : ''}
-    <div class="shipgrid"><label class="l">Carrier<select onchange="saveShip('ship_carrier', this.value)" ${r.ship_label_path ? 'disabled' : ''}>${CARRIERS.map(x => `<option ${x === carrier ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
+    ${hasLabel ? labelLine(r) : ''}
+    <div class="shipgrid"><label class="l">Carrier<select onchange="saveShip('ship_carrier', this.value)" ${hasLabel ? 'disabled' : ''}>${CARRIERS.map(x => `<option ${x === carrier ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
       ${pickup ? '<div class="note" style="align-self:end;padding-bottom:10px;">No tracking needed. Use “Mark delivered” when the customer picks it up.</div>'
-        : `<label class="l">Tracking #<input id="trk" value="${esc(r.return_tracking || '')}" placeholder="Paste the tracking number, or create a FedEx label" ${r.ship_label_path ? 'readonly title="Comes from the FedEx label. Cancel the label to change it."' : ''} onchange="saveShip('return_tracking', this.value)"></label>`}</div>
-    <div class="shipline">${line('Status', r.return_tracking ? esc(r.ship_status || (carrier === 'FedEx' ? 'Waiting for the first FedEx check' : 'Not checked automatically')) + (r.ship_checked_at ? ' <span class="note">(checked ' + fmtDT(r.ship_checked_at) + ')</span>' : '') : '')}
+        : `<label class="l">Tracking #<input id="trk" value="${esc(r.return_tracking || '')}" placeholder="Paste the tracking number, or create a label" ${hasLabel ? 'readonly title="Comes from the label. Cancel the label to change it."' : ''} onchange="saveShip('return_tracking', this.value)"></label>`}</div>
+    <div class="shipline">${line('Status', r.return_tracking ? esc(r.ship_status || (autoTrack ? 'Waiting for the first tracking check' : 'Not checked automatically')) + (r.ship_checked_at ? ' <span class="note">(checked ' + fmtDT(r.ship_checked_at) + ')</span>' : '') : '')}
       ${line('Shipped', r.shipped_at ? fmtDate(r.shipped_at) : '')}${line('Delivered', r.delivered_at ? fmtDate(r.delivered_at) : '')}${line('Survey due', surveyDueText(r))}
       ${url ? `<span><a href="${esc(url)}" target="_blank" rel="noopener" style="color:var(--teal);">Track ${esc(carrier)} →</a></span>` : ''}</div>
     <div class="bar">
-      ${carrier === 'FedEx' && r.return_tracking && !r.delivered_at ? `<button class="btn sm" id="chk-btn" onclick="checkShipNow()">Check FedEx now</button>` : ''}
+      ${autoTrack && r.return_tracking && !r.delivered_at ? `<button class="btn sm" id="chk-btn" onclick="checkShipNow()">Check tracking now</button>` : ''}
       ${!r.shipped_at && !pickup ? `<button class="btn sm ghost" onclick="markShipped()">Mark shipped now</button>` : ''}
       ${!r.delivered_at ? `<button class="btn sm ghost" onclick="markDelivered()">Mark delivered${pickup ? ' (picked up)' : ''}</button>` : ''}
-      <span class="note">${carrier === 'FedEx' ? 'FedEx is checked every 30 minutes: Shipped at the pickup scan, Delivered at delivery.' : 'Not FedEx: mark shipped and delivered by hand.'}</span></div></div>`;
+      <span class="note">${autoTrack ? carrier + ' is checked every 30 minutes: Shipped at the pickup scan, Delivered at delivery.' : pickup ? '' : 'Not checked automatically (only FedEx, and UPS/USPS labels made here): mark shipped and delivered by hand.'}</span></div></div>`;
 }
-// ── FedEx labels ────────────────────────────────────────
-// The server talks to FedEx; the app collects the address, box and service and shows the label.
-const SHIP_SERVICES = [['GROUND_HOME_DELIVERY', 'FedEx Home Delivery (home address)'], ['FEDEX_GROUND', 'FedEx Ground (business address)'],
-  ['FEDEX_2_DAY', 'FedEx 2Day'], ['STANDARD_OVERNIGHT', 'FedEx Standard Overnight'], ['PRIORITY_OVERNIGHT', 'FedEx Priority Overnight']];
-function serviceName(k) { return ((SHIP_SERVICES.find(x => x[0] === k) || [])[1] || k || '').replace(/ \(.*\)$/, ''); }
+// ── Shipping labels (ShipStation) ───────────────────────
+// The server talks to ShipStation; the app collects the address and box, shows the prices and the label.
+const LABEL_CARRIERS = ['FedEx', 'UPS', 'USPS'];
 async function api(path, body) {
   const { data: s } = await sb.auth.getSession();
   const res = await fetch(SERVER + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (s && s.session ? s.session.access_token : '') }, body: JSON.stringify(body || {}) });
@@ -1831,98 +1830,111 @@ function splitAddress(one) {
 }
 function labelButtons(r) {
   const carrier = r.ship_carrier || 'FedEx';
-  if (r.ship_label_path && r.return_tracking) return `<span class="bar" style="gap:8px;"><button class="btn sm primary" onclick="printLabel()">Print label</button>${!r.shipped_at ? `<button class="btn sm ghost" onclick="cancelLabel()">Cancel label</button>` : ''}</span>`;
-  if (carrier !== 'FedEx' || r.return_tracking || r.delivered_at) return '';
-  return `<button class="btn sm primary" onclick="openLabel()">Create FedEx label</button>`;
+  if (r.return_tracking && (r.ship_label_id || r.ship_label_path)) return `<span class="bar" style="gap:8px;">${r.ship_label_path ? `<button class="btn sm primary" onclick="printLabel()">Print label</button>` : ''}${!r.shipped_at ? `<button class="btn sm ghost" onclick="cancelLabel()">Cancel label</button>` : ''}</span>`;
+  if (!LABEL_CARRIERS.includes(carrier) || r.return_tracking || r.delivered_at) return '';
+  return `<button class="btn sm primary" onclick="openLabel()">Create shipping label</button>`;
 }
 function labelLine(r) {
-  const f = shipFrom.find(x => x.id === r.ship_from_id);
-  return `<div class="shipline">${r.ship_label_test ? '<span class="pill test">TEST LABEL</span>' : ''}<span><b>Label</b>${esc(serviceName(r.ship_service))}${f ? ' from ' + esc(f.label) : ''}</span>
-    <span><b>Box</b>${esc(r.ship_weight_lb || '')} lb, ${esc(r.ship_dims || '')} in</span><span><b>Made</b>${fmtDT(r.ship_label_at)} by ${esc(nameOf(r.ship_label_by))}</span></div>`;
+  return `<div class="shipline">${r.ship_label_test ? '<span class="pill test">TEST LABEL</span>' : ''}<span><b>Label</b>${esc(r.ship_carrier || '')} · ${esc(r.ship_service || '')}${r.ship_from_name ? ' from ' + esc(r.ship_from_name) : ''}</span>
+    <span><b>Box</b>${esc(r.ship_weight_lb || '')} lb, ${esc(r.ship_dims || '')} in</span>${r.ship_cost != null ? `<span><b>Cost</b>$${Number(r.ship_cost).toFixed(2)}</span>` : ''}<span><b>Made</b>${fmtDT(r.ship_label_at)} by ${esc(nameOf(r.ship_label_by))}</span>
+    ${r.ship_label_id && !r.ship_label_path ? '<span class="note">PDF not saved here. Print it from ShipStation.</span>' : ''}</div>`;
 }
 let lbl = null;   // the label form while it's open
-function openLabel() {
+async function openLabel() {
   const r = curRec(); if (!r) return;
-  if (!shipFrom.length) return toast('No ship-from addresses yet. Run 25-fedex-labels.sql, then refresh.', true);
+  if (!shipFrom.length) {
+    try { shipFrom = (await api('/ship/from')).from || []; }
+    catch (e) { return toast('Could not load the ShipStation ship-from locations: ' + e.message, true); }
+    if (!shipFrom.length) return toast('No Ship From Locations in ShipStation.', true);
+  }
   const a = r.ship_street1 ? { street1: r.ship_street1, street2: r.ship_street2 || '', city: r.ship_city || '', state: r.ship_state || '', zip: r.ship_zip || '' } : splitAddress(r.address);
-  const from = r.ship_from_id || (shipFrom.find(x => x.is_default) || shipFrom[0]).id;
-  lbl = { res: r.ship_residential ?? null, service: r.ship_service || (r.ship_residential === false ? 'FEDEX_GROUND' : 'GROUND_HOME_DELIVERY') };
+  const from = (shipFrom.find(x => x.name === r.ship_from_name) || shipFrom.find(x => x.is_default) || shipFrom[0]).id;
+  lbl = { res: r.ship_residential ?? null, rates: null, pick: null };
   const inp = (id, label, val, extra) => `<label class="l">${label}<input id="lb-${id}" value="${esc(val || '')}" ${extra || ''} oninput="lbChanged()"></label>`;
-  document.getElementById('modal-body').innerHTML = `<h2>Create FedEx label</h2>
-    <p class="note">4×6 label, no signature, no insurance. FX’s phone goes on the label. The Freshdesk # prints as the reference.</p>
-    <label class="l">Ship from<select id="lb-from">${shipFrom.map(f => `<option value="${f.id}" ${f.id === from ? 'selected' : ''}>${esc(f.label)} · ${esc(f.company)}, ${esc(f.city)} ${esc(f.state)}</option>`).join('')}</select></label>
+  document.getElementById('modal-body').innerHTML = `<h2>Create shipping label</h2>
+    <p class="note">4×6 label, no signature, no insurance. FX’s phone goes on the label. The Freshdesk # prints as the reference.
+      Every label is real: FedEx bills FX’s account once it’s scanned; UPS and USPS come out of the ShipStation balance.</p>
+    <label class="l">Ship from<select id="lb-from" onchange="lbChanged()">${shipFrom.map(f => `<option value="${esc(f.id)}" ${f.id === from ? 'selected' : ''}>${esc(f.name)} · ${esc(f.company)}, ${esc(f.city)} ${esc(f.state)}</option>`).join('')}</select></label>
     <div class="l" style="margin-top:6px;">Ship to: <b>${esc(r.customer_name || 'Customer')}</b>${r.address ? ` <span class="note">(page 1: ${esc(r.address)})</span>` : ''}</div>
     <div class="grid2">${inp('s1', 'Street', a.street1)}${inp('s2', 'Apt / suite (optional)', a.street2)}</div>
     <div class="grid4" style="grid-template-columns:2fr 70px 110px;">${inp('city', 'City', a.city)}${inp('st', 'State', a.state, 'maxlength="2" style="text-transform:uppercase;"')}${inp('zip', 'ZIP', a.zip, 'inputmode="numeric"')}</div>
-    <div class="bar"><button class="btn sm" id="lb-chk" onclick="lbCheck()">Check address with FedEx</button><span class="note" id="lb-amsg" role="status"></span></div>
+    <div class="bar"><button class="btn sm" id="lb-chk" onclick="lbCheck()">Check address</button><span class="note" id="lb-amsg" role="status"></span></div>
     <div class="l">Address type<div class="bar" id="lb-res">${lbResButtons()}</div></div>
-    <label class="l">Service<select id="lb-svc" onchange="lbl.service=this.value;lbWhy()">${SHIP_SERVICES.map(([k, n]) => `<option value="${k}" ${k === lbl.service ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
     <div class="grid4">${inp('wt', 'Weight (lb)', '', 'inputmode="decimal"')}${inp('L', 'Length (in)', '', 'inputmode="numeric"')}${inp('W', 'Width (in)', '', 'inputmode="numeric"')}${inp('H', 'Height (in)', '', 'inputmode="numeric"')}</div>
-    <div class="bar"><button class="btn sm ghost" id="lb-rt" onclick="lbRates()">See prices</button><span class="note">Internal only, never on the Service Report.</span></div>
+    <div class="bar"><button class="btn sm" id="lb-rt" onclick="lbRates()">See prices</button><span class="note">FedEx, UPS and USPS, cheapest first. Internal only, never on the Service Report.</span></div>
     <div id="lb-rates"></div>
     <p class="note" id="lb-why" role="status"></p>
     <div class="bar"><button class="btn primary" id="lb-go" onclick="lbCreate()">Create label</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
   document.getElementById('modal').classList.add('open');
   lbWhy();
 }
-function lbResButtons() { return [[true, 'Home'], [false, 'Business']].map(([v, t]) => `<button type="button" class="opt ${lbl.res === v ? 'on' : ''}" onclick="lbSetRes(${v})">${t}</button>`).join(' ') + (lbl.res == null ? ' <span class="note">Pick one, or check the address and FedEx will tell you.</span>' : ''); }
+function lbResButtons() { return [[true, 'Home'], [false, 'Business']].map(([v, t]) => `<button type="button" class="opt ${lbl.res === v ? 'on' : ''}" onclick="lbSetRes(${v})">${t}</button>`).join(' ') + (lbl.res == null ? ' <span class="note">Pick one, or check the address and ShipStation will tell you.</span>' : ''); }
 function lbSetRes(v) {
+  if (lbl.res !== v) lbChanged();          // carriers price homes and businesses differently
   lbl.res = v; document.getElementById('lb-res').innerHTML = lbResButtons();
-  const svc = document.getElementById('lb-svc');
-  if (v === false && lbl.service === 'GROUND_HOME_DELIVERY') lbl.service = 'FEDEX_GROUND';
-  if (v === true && lbl.service === 'FEDEX_GROUND') lbl.service = 'GROUND_HOME_DELIVERY';
-  if (svc) svc.value = lbl.service;
   lbWhy();
 }
 function lbVals() {
   const g = id => (document.getElementById('lb-' + id) || {}).value || '';
   return { address: { street1: g('s1').trim(), street2: g('s2').trim(), city: g('city').trim(), state: g('st').trim().toUpperCase(), zip: g('zip').trim() },
-    from_id: Number(g('from')), weight: g('wt'), length: g('L'), width: g('W'), height: g('H') };
+    from_id: g('from'), weight: g('wt'), length: g('L'), width: g('W'), height: g('H') };
 }
-function lbProblem() {
+function lbProblem(forPrices) {
   const v = lbVals(), a = v.address;
   if (!a.street1 || !a.city || !/^[A-Z]{2}$/.test(a.state) || !/^\d{5}(-\d{4})?$/.test(a.zip)) return 'Fill in the street, city, 2-letter state and 5-digit ZIP.';
   if (lbl.res == null) return 'Pick Home or Business (or check the address).';
-  if (lbl.service === 'GROUND_HOME_DELIVERY' && lbl.res === false) return 'Home Delivery is only for home addresses. Pick FedEx Ground.';
   if (!(Number(v.weight) > 0)) return 'Enter the weight.';
   if (!(Number(v.length) > 0 && Number(v.width) > 0 && Number(v.height) > 0)) return 'Enter the box length, width and height.';
+  if (!forPrices && !lbl.pick) return 'Click See prices and pick a service.';
   return '';
 }
-function lbWhy() { const p = lbProblem(), el = document.getElementById('lb-why'), b = document.getElementById('lb-go'); if (el) el.textContent = p; if (b) b.disabled = !!p; }
-function lbChanged() { const r = document.getElementById('lb-rates'); if (r) r.innerHTML = ''; lbWhy(); }
+function lbWhy() { const p = lbProblem(), el = document.getElementById('lb-why'), b = document.getElementById('lb-go'); if (el) { el.textContent = p; el.style.color = ''; } if (b) b.disabled = !!p; }
+// Anything that changes the price clears the price list and the pick
+function lbChanged() { if (!lbl) return; lbl.rates = null; lbl.pick = null; const r = document.getElementById('lb-rates'); if (r) r.innerHTML = ''; lbWhy(); }
 async function lbSaveAddress() {
   const a = lbVals().address;
   return patchRecord({ ship_street1: a.street1, ship_street2: a.street2 || null, ship_city: a.city, ship_state: a.state, ship_zip: a.zip, ship_residential: lbl.res });
 }
 async function lbCheck() {
   const m = document.getElementById('lb-amsg'), b = document.getElementById('lb-chk');
-  b.disabled = true; m.textContent = 'Checking with FedEx…';
+  b.disabled = true; m.textContent = 'Checking…';
   try {
     const out = await api('/ship/validate-address', { address: lbVals().address });
-    if (!out.found) { m.textContent = out.note || 'FedEx could not check it.'; return; }
-    // Only take FedEx's version of the address when FedEx confirmed it; otherwise keep what was typed
-    const x = out.address, set = (id, v) => { const el = document.getElementById('lb-' + id); if (el && v) el.value = v; };
+    if (!out.found) { m.textContent = out.note || 'ShipStation could not check it.'; return; }
+    // Only take ShipStation's version of the address when it confirmed it; otherwise keep what was typed
+    const x = out.address, set = (id, v) => { const el = document.getElementById('lb-' + id); if (el && v != null) el.value = v; };
     const norm = a => JSON.stringify([a.street1, a.street2, a.city, a.state, String(a.zip).slice(0, 5)].map(v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '')));
     const before = norm(lbVals().address);
-    if (out.resolved) { set('s1', x.street1); set('s2', x.street2); set('city', x.city); set('st', x.state); set('zip', x.zip); }
+    if (out.resolved) { set('s1', x.street1); set('s2', x.street2 || ''); set('city', x.city); set('st', x.state); set('zip', String(x.zip || '').slice(0, 5)); }
     const changed = out.resolved && before !== norm(lbVals().address);
     if (out.residential != null) lbSetRes(out.residential);
-    m.textContent = (out.resolved ? '✓ FedEx confirmed this address' + (changed ? ' and corrected it. Look over the change' : '') + '.'
-        : 'FedEx couldn’t confirm it, so it was left as typed. Double-check it.' + (out.test ? ' (FedEx’s test system can’t confirm real addresses; this works with the real keys.)' : '')) +
+    m.textContent = (out.resolved ? '✓ Address confirmed' + (changed ? ' and corrected. Look over the change' : '') + '.'
+        : 'Couldn’t confirm it, so it was left as typed. Double-check it.' + (out.note ? ' (' + out.note + ')' : '')) +
       (out.residential === true ? ' It’s a home.' : out.residential === false ? ' It’s a business.' : ' Pick Home or Business.');
     lbChanged();
   } catch (e) { m.textContent = 'Could not check it (' + e.message + '). You can still make the label.'; }
   finally { b.disabled = false; }
 }
+function lbRatesTable() {
+  const el = document.getElementById('lb-rates'); if (!el || !lbl.rates) return;
+  const rows = lbl.rates;
+  el.innerHTML = rows.length ? `<div style="overflow-x:auto;max-height:300px;"><table><thead><tr><th>Carrier</th><th>Service</th><th>Price</th><th>Delivers</th><th></th></tr></thead><tbody>${rows.map((x, i) => {
+      const on = lbl.pick && lbl.pick.carrier_id === x.carrier_id && lbl.pick.service_code === x.service_code;
+      const when = x.delivery ? fmtDate(x.delivery + 'T12:00:00') : x.days ? x.days + (x.days === 1 ? ' day' : ' days') : '—';
+      return `<tr><td>${esc(x.carrier)}</td><td>${esc(x.name)}</td><td>$${Number(x.cost).toFixed(2)}</td><td>${esc(when)}</td>
+        <td><button class="btn sm ${on ? 'primary' : ''}" onclick="lbPick(${i})">${on ? 'Picked' : 'Use this'}</button></td></tr>`; }).join('')}</tbody></table></div>`
+    : '<p class="note">No prices came back for this box and address.</p>';
+  if (lbl.note) el.innerHTML += `<p class="note">${esc(lbl.note)}</p>`;
+}
+function lbPick(i) { lbl.pick = lbl.rates[i] || null; lbRatesTable(); lbWhy(); }
 async function lbRates() {
-  const p = lbProblem(); if (p) return toast(p, true);
+  const p = lbProblem(true); if (p) return toast(p, true);
   const el = document.getElementById('lb-rates'), b = document.getElementById('lb-rt'); b.disabled = true; el.innerHTML = '<p class="note">Getting prices…</p>';
   try {
-    if (!(await lbSaveAddress())) return;
+    if (!(await lbSaveAddress())) { el.innerHTML = ''; return; }
     const v = lbVals(); const out = await api('/ship/rates', { record_id: curRec().id, from_id: v.from_id, residential: lbl.res, weight: v.weight, length: v.length, width: v.width, height: v.height });
-    const rows = (out.rates || []).filter(x => !(lbl.res === false && x.service === 'GROUND_HOME_DELIVERY') && !(lbl.res === true && x.service === 'FEDEX_GROUND'));
-    el.innerHTML = rows.length ? `<table><thead><tr><th>Service</th><th>Price</th><th>Delivers</th><th></th></tr></thead><tbody>${rows.map(x => `<tr><td>${esc(x.name)}</td><td>${x.cost != null ? '$' + Number(x.cost).toFixed(2) : '—'}</td><td>${esc(x.delivery ? (/^\d{4}-\d\d-\d\d/.test(x.delivery) ? fmtDate(x.delivery + 'T12:00:00') : x.delivery) : '—')}</td>
-      <td><button class="btn sm ${x.service === lbl.service ? 'primary' : ''}" onclick="lbl.service='${x.service}';document.getElementById('lb-svc').value='${x.service}';lbRates()">${x.service === lbl.service ? 'Picked' : 'Use this'}</button></td></tr>`).join('')}</tbody></table>${out.test ? '<p class="note">Test prices from FedEx’s sandbox.</p>' : ''}` : '<p class="note">FedEx returned no prices for this box and address.</p>';
+    lbl.rates = out.rates || []; lbl.note = out.note || ''; lbl.pick = null;
+    lbRatesTable(); lbWhy();
   } catch (e) { el.innerHTML = `<p class="note" style="color:var(--red);">Could not get prices: ${esc(e.message)}</p>`; }
   finally { b.disabled = false; }
 }
@@ -1934,29 +1946,33 @@ async function openLabelFile(path, win) {
 async function lbCreate() {
   const p = lbProblem(); if (p) return toast(p, true);
   const r = curRec(); if (!r) return;
+  const pick = lbl.pick;
+  if (!confirm('Buy this label?\n\n' + pick.carrier + ' · ' + pick.name + ' · $' + Number(pick.cost).toFixed(2))) return;
   const b = document.getElementById('lb-go'); b.disabled = true; b.textContent = 'Making the label…';
   const win = window.open('', '_blank');           // opened now so the browser doesn't block it
-  if (win) win.document.write('<p style="font-family:Arial;padding:20px">Making the FedEx label…</p>');
+  if (win) win.document.write('<p style="font-family:Arial;padding:20px">Making the ' + esc(pick.carrier) + ' label…</p>');
   try {
     if (!(await lbSaveAddress())) throw new Error('could not save the address');
     const v = lbVals();
-    const out = await api('/ship/label', { record_id: r.id, from_id: v.from_id, service: lbl.service, residential: lbl.res, weight: v.weight, length: v.length, width: v.width, height: v.height });
+    const out = await api('/ship/label', { record_id: r.id, from_id: v.from_id, carrier_id: pick.carrier_id, service_code: pick.service_code, service_name: pick.name,
+      residential: lbl.res, weight: v.weight, length: v.length, width: v.width, height: v.height });
     closeModal();
     const { data } = await sb.from('rr_records').select('*').eq('id', r.id).single(); if (data) { Object.assign(r, data); normStep(r); }
     sendMsg = null; await loadEvents(r.id); renderRecord(true);
     if (out.label_path) await openLabelFile(out.label_path, win);
     else if (out.label_base64 && win) win.location = 'data:application/pdf;base64,' + out.label_base64;
-    toast((out.test ? 'Test label made. ' : 'Label made. ') + 'Tracking ' + out.tracking);
+    else if (win) win.close();
+    toast(out.carrier + ' label made. Tracking ' + out.tracking + (out.note ? '. ' + out.note : ''), !!out.note);
   } catch (e) {
     if (win) win.close();
     b.disabled = false; b.textContent = 'Create label';
-    const el = document.getElementById('lb-why'); if (el) el.textContent = 'Not made: ' + e.message;
+    const el = document.getElementById('lb-why'); if (el) { el.textContent = 'Not made: ' + e.message; el.style.color = 'var(--red)'; }
   }
 }
 async function printLabel() { const r = curRec(); if (r && r.ship_label_path) openLabelFile(r.ship_label_path, window.open('', '_blank')); }
 async function cancelLabel() {
   const r = curRec(); if (!r) return;
-  if (!confirm('Cancel this FedEx label (tracking ' + r.return_tracking + ')? Throw away the printed label.')) return;
+  if (!confirm('Cancel this ' + (r.ship_carrier || '') + ' label (tracking ' + r.return_tracking + ')? Throw away the printed label.')) return;
   try {
     await api('/ship/cancel', { record_id: r.id });
     const { data } = await sb.from('rr_records').select('*').eq('id', r.id).single(); if (data) { Object.assign(r, data); normStep(r); }
@@ -1999,8 +2015,8 @@ async function checkShipNow() {
     const out = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(out.error || 'failed (' + res.status + ')');
     const { data } = await sb.from('rr_records').select('*').eq('id', r.id).single(); if (data) Object.assign(r, data);
-    await loadEvents(r.id); renderRecord(true); toast('FedEx: ' + (out.fedex || r.ship_status || 'checked'));
-  } catch (e) { toast('Could not check FedEx: ' + e.message, true); if (b) { b.disabled = false; b.textContent = 'Check FedEx now'; } }
+    await loadEvents(r.id); renderRecord(true); toast((out.carrier || r.ship_carrier || 'Tracking') + ': ' + (out.status || out.fedex || r.ship_status || 'checked'));
+  } catch (e) { toast('Could not check tracking: ' + e.message, true); if (b) { b.disabled = false; b.textContent = 'Check tracking now'; } }
 }
 function surveyBox(r) {
   const x = surveys.find(v => v.record_id === r.id);
@@ -2116,43 +2132,9 @@ function renderLists() {
         ${list.map(o => `<div class="prow" style="margin:0;"><input value="${esc(o.value)}" onchange="renameOpt(${o.id}, this.value)" aria-label="${esc(title)} value"><button class="btn sm ghost" onclick="deleteOpt(${o.id})">Remove</button></div>`).join('') || '<span class="note">Empty.</span>'}
         <div class="prow" style="margin:6px 0 0;"><input id="add-${kind}" placeholder="${esc(ph)}" onkeydown="if(event.key==='Enter')addOpt('${kind}')"><button class="btn sm" onclick="addOpt('${kind}')">Add</button></div></div>`;
     }).join('')}</div>
-    <div class="card" style="margin-top:18px;display:flex;flex-direction:column;gap:8px;"><h2>Ship-from addresses <span class="note">(FedEx labels)</span></h2>
-      <span class="note">Changes save when you leave a box. The company prints on the label; the default is picked first.</span>
-      <div style="overflow-x:auto;"><table><thead><tr><th>Default</th><th>Name in the list</th><th>Company on label</th><th>Street</th><th>Apt / suite</th><th>City</th><th>State</th><th>ZIP</th><th>Phone</th><th></th></tr></thead><tbody>
-      ${shipFrom.map(f => `<tr><td><input type="radio" name="sfdef" ${f.is_default ? 'checked' : ''} onchange="sfDefault(${f.id})" aria-label="Default"></td>${['label', 'company', 'street1', 'street2', 'city', 'state', 'zip', 'phone'].map(k => `<td><input value="${esc(f[k] || '')}" style="min-width:${k === 'state' ? 50 : k === 'zip' ? 80 : 120}px;" onchange="sfSave(${f.id},'${k}',this.value)" aria-label="${k}"></td>`).join('')}<td><button class="btn sm ghost" onclick="sfRemove(${f.id})">Remove</button></td></tr>`).join('') || '<tr><td colspan="10" class="note">None yet. Run 25-fedex-labels.sql.</td></tr>'}
-      </tbody></table></div>
-      <div><button class="btn sm" onclick="sfAdd()">Add an address</button></div></div>
     <div class="card" style="margin-top:18px;display:flex;flex-direction:column;gap:8px;"><h2>Parts <span class="note">(${parts.length.toLocaleString()} parts)</span></h2>
       <span class="note">Used for the part lookup on Parts used. To update it, choose the new Excel export: the first column is the part number, the second the part name (a header row is fine). New parts are added and changed names updated; nothing is deleted.</span>
       <div class="bar"><label class="btn">Update parts from Excel<input type="file" accept=".xlsx,.xls,.csv" hidden onchange="importParts(this.files[0]);this.value=''"></label><span class="note" id="parts-msg"></span></div></div>`;
-}
-async function sfSave(id, k, v) {
-  v = String(v || '').trim(); if (k === 'state') v = v.toUpperCase();
-  if (['label', 'company', 'street1', 'city', 'state', 'zip', 'phone'].includes(k) && !v) { toast('That one can’t be empty.', true); return renderLists(); }
-  const { error } = await sb.from('rr_ship_from').update({ [k]: v || null, updated_at: new Date().toISOString() }).eq('id', id);
-  if (error) return toast('Could not save: ' + error.message, true);
-  const f = shipFrom.find(x => x.id === id); if (f) f[k] = v || null; toast('Saved');
-}
-async function sfDefault(id) {
-  const a = await sb.from('rr_ship_from').update({ is_default: false }).neq('id', id);
-  const b = await sb.from('rr_ship_from').update({ is_default: true }).eq('id', id);
-  if (a.error || b.error) return toast('Could not save', true);
-  shipFrom.forEach(x => { x.is_default = x.id === id; }); toast('Default saved');
-}
-async function sfAdd() {
-  const base = shipFrom.find(x => x.is_default) || shipFrom[0] || {};
-  const { data, error } = await sb.from('rr_ship_from').insert({ label: 'New address', company: base.company || 'FX Airguns LLC', phone: base.phone || '9497426056', email: base.email || null,
-    street1: base.street1 || 'Street', city: base.city || 'City', state: base.state || 'CA', zip: base.zip || '00000', sort: shipFrom.length + 1 }).select().single();
-  if (error) return toast('Could not add: ' + error.message, true);
-  shipFrom.push(data); renderLists(); toast('Added. Fill in the details.');
-}
-async function sfRemove(id) {
-  const f = shipFrom.find(x => x.id === id); if (!f) return;
-  if (f.is_default) return toast('Make another address the default first.', true);
-  if (!confirm('Remove “' + f.label + '”?')) return;
-  const { error } = await sb.from('rr_ship_from').delete().eq('id', id);
-  if (error) return toast('Could not remove: ' + error.message, true);
-  shipFrom = shipFrom.filter(x => x.id !== id); renderLists();
 }
 function tidyOpt(kind, v) {
   v = String(v || '').trim(); if (!v) return '';
