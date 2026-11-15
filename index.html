@@ -1250,7 +1250,10 @@ function renderWork(r) {
   return `<div class="card" style="display:flex;flex-direction:column;gap:8px;"><h2>What was done</h2>${notesBlock('W', 'Your notes (what you did)')}</div>
     <div class="card" style="display:flex;flex-direction:column;gap:8px;"><div class="bar" style="justify-content:space-between;"><h2>Parts used</h2>${est.length ? `<button class="btn sm" onclick="copyEstimateParts()">Copy from the estimate (H)</button>` : ''}</div>
       <div id="w-parts">${w.parts.map((p, i) => workPartRow(p, i)).join('') || '<span class="note">No parts yet.</span>'}</div>
-      <div><button class="btn sm" onclick="addWorkPart()">Add part</button></div></div>
+      <div><button class="btn sm" onclick="addWorkPart()">Add part</button></div>
+      <div class="drop" tabindex="0" role="button" aria-label="Fill parts from a Monitor screenshot" onpaste="partsPaste(event)" ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')" ondrop="partsDrop(event)">
+        <b>Fill from a Monitor screenshot.</b> Click here and press Ctrl+V, drag the screenshot in, or <label class="btn sm">Choose file<input type="file" accept="image/*" hidden onchange="partsShot(this.files[0]);this.value=''"></label>
+        <span class="note" id="pr-msg" role="status"></span></div></div>
     <div class="card">${photoBlock('W', 'Photos of the work (optional)')}</div>`;
 }
 function workPartRow(p, i) {
@@ -1262,6 +1265,75 @@ function redrawWorkParts() { const el = document.getElementById('w-parts'); cons
 function addWorkPart() { workOf(curRec()).parts.push({ qty: 1, desc: '', pn: '' }); scheduleSave(); redrawWorkParts(); }
 function setWorkPart(i, k, v) { const w = workOf(curRec()); if (w.parts[i]) { w.parts[i][k] = v; scheduleSave(); } }
 function removeWorkPart(i) { workOf(curRec()).parts.splice(i, 1); scheduleSave(); redrawWorkParts(); }
+// ── Parts used from a Monitor screenshot ──
+// The AI reads part #, name and quantity (never prices); each part is checked against the
+// parts list, and the tech confirms before anything is added.
+let readParts = [];
+function partsPaste(e) {
+  const item = [...((e.clipboardData && e.clipboardData.items) || [])].find(x => /^image\//.test(x.type));
+  if (!item) { const m = document.getElementById('pr-msg'); if (m) m.textContent = 'No picture on the clipboard. Take the screenshot first (Windows key + Shift + S), then press Ctrl+V here.'; return; }
+  e.preventDefault(); partsShot(item.getAsFile());
+}
+function partsDrop(e) { e.preventDefault(); e.currentTarget.classList.remove('over'); partsShot([...(e.dataTransfer.files || [])].find(f => /^image\//.test(f.type))); }
+function shrinkShot(file) {
+  // Keep screenshots sharp: send as they are unless very large
+  if (file.size < 3500000 && /^image\/(png|jpeg|webp)$/.test(file.type)) return Promise.resolve({ blob: file, type: file.type });
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => { const sc = Math.min(1, 2400 / Math.max(img.width, img.height)); const c = document.createElement('canvas');
+      c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob(b => resolve({ blob: b || file, type: b ? 'image/png' : file.type }), 'image/png'); URL.revokeObjectURL(img.src); };
+    img.onerror = () => resolve({ blob: file, type: file.type });
+    img.src = URL.createObjectURL(file);
+  });
+}
+function pnKey(pn) { return String(pn || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function matchPart(pn) {
+  const exact = partsByPn[String(pn || '').trim().toLowerCase()]; if (exact) return exact;
+  const k = pnKey(pn); return k ? parts.find(p => pnKey(p.pn) === k) || null : null;
+}
+async function partsShot(file) {
+  const m = document.getElementById('pr-msg');
+  if (!file) { if (m) m.textContent = 'That isn’t a picture.'; return; }
+  if (m) m.textContent = 'Reading the parts…';
+  try {
+    if (!partsLoaded) await loadParts();
+    const { blob, type } = await shrinkShot(file);
+    const { data: ss } = await sb.auth.getSession();
+    const res = await fetch(SERVER + '/read-parts', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (ss && ss.session ? ss.session.access_token : '') },
+      body: JSON.stringify({ image_base64: await blobToBase64(blob), media_type: type }) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || 'failed (' + res.status + ')');
+    if (!out.rows || !out.rows.length) { if (m) m.textContent = 'No parts found on that screenshot' + (out.note ? ' (' + out.note + ')' : '') + '.'; return; }
+    const have = new Set(workOf(curRec()).parts.map(p => pnKey(p.pn)).filter(Boolean));
+    readParts = out.rows.map(x => { const hit = matchPart(x.pn); const dup = have.has(pnKey(hit ? hit.pn : x.pn));
+      return { pn: hit ? hit.pn : x.pn, desc: hit ? hit.name : x.name, shotName: x.name, qty: x.qty, unsure: x.unsure, known: !!hit, dup, on: !dup }; });
+    if (m) m.textContent = '';
+    openReadParts();
+  } catch (e) { if (m) m.textContent = 'Could not read it (' + (e.message || e) + '). Add the parts by hand.'; }
+}
+function openReadParts() {
+  const rows = readParts.map((x, i) => `<tr><td><input type="checkbox" ${x.on ? 'checked' : ''} onchange="readParts[${i}].on=this.checked" aria-label="Add ${esc(x.pn)}"></td>
+    <td><input type="number" min="0" step="any" value="${esc(x.qty)}" style="max-width:70px;" oninput="readParts[${i}].qty=this.value" aria-label="Quantity"></td>
+    <td>${esc(x.pn)}</td><td>${esc(x.desc || '')}</td>
+    <td>${x.dup ? '<span class="pill">Already on the list</span>' : x.known ? (x.unsure ? '<span class="pill hold">In the parts list · check the #</span>' : '<span class="pill step">In the parts list</span>') : '<span class="pill hold">Not in the parts list · check it</span>'}</td></tr>`).join('');
+  document.getElementById('modal-body').innerHTML = `<h2>Parts read from the screenshot</h2>
+    <p class="note">Check them against the screenshot, untick anything that wasn’t used on this repair, then add. Prices are not read.</p>
+    <div style="overflow-x:auto;"><table><thead><tr><th></th><th>Qty</th><th>Part #</th><th>Description</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="bar"><button class="btn primary" onclick="addReadParts()">Add ticked parts</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
+  document.getElementById('modal').classList.add('open');
+}
+async function addReadParts() {
+  const r = curRec(); if (!r) return;
+  const pick = readParts.filter(x => x.on);
+  closeModal();
+  if (!pick.length) return;
+  const w = workOf(r);
+  pick.forEach(x => w.parts.push({ qty: Number(x.qty) > 0 ? Number(x.qty) : 1, desc: x.desc || '', pn: x.pn || '' }));
+  scheduleSave(); redrawWorkParts(); refreshTestDone();
+  await logEvent(r.id, 'edit', pick.length + ' part' + (pick.length > 1 ? 's' : '') + ' added from a Monitor screenshot');
+  toast(pick.length + ' part' + (pick.length > 1 ? 's' : '') + ' added');
+}
 function copyEstimateParts() {
   const r = curRec(), w = workOf(r), est = ((asOf(r).H || {}).v || {}).parts || [];
   if (w.parts.length && !confirm('Add the estimate’s parts to the list?')) return;
