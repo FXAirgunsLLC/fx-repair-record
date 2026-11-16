@@ -732,7 +732,7 @@ function renderRecord(keepScroll) {
   let h = `<div class="bar" style="justify-content:space-between;">
       <div><a href="#" onclick="backToList();return false;" style="color:var(--teal);font-size:13px;text-decoration:none;">← Repairs</a>
       <h1>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) + ' · ' : ''}${esc(r.customer_name || 'Unknown customer')}${r.model ? ' · ' + esc(r.model) : ''} ${r.is_test ? '<span class="pill test" style="vertical-align:middle;">TEST</span>' : ''}</h1>${siblingsHtml(r)}</div>
-      <div class="bar">${r.report_sent_at ? `<span class="pill step">Report sent ${fmtDate(r.report_sent_at)}</span>` : ''}<button class="btn" onclick="recTab='Report';renderRecord(true)">Service Report</button></div>
+      <div class="bar">${r.report_sent_at ? `<span class="pill step">Report sent ${fmtDate(r.report_sent_at)}</span>` : ''}<button class="btn" onclick="recTab='Report';renderRecord(true)">Service Report</button>${r.is_test ? `<button class="btn ghost" onclick="deleteTestRecord()" title="Test records only">Delete test record</button>` : ''}</div>
     </div>
     <div class="card" style="margin-top:14px;">
       <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}"><b>${esc(stepName(s))}</b><span>${st[s] ? fmtDate(st[s]) : (i === si ? 'now' : '')}</span></div>`).join('')}</div>
@@ -821,6 +821,18 @@ async function copyStatusLink() {
   const link = statusUrl(r);
   try { await navigator.clipboard.writeText(link); toast('Status link copied. Paste it into your Freshdesk reply.'); }
   catch (e) { prompt('Copy the status link:', link); }
+}
+// Test records only: deletes the record, its history, photos, survey and files (the server checks it's a test)
+async function deleteTestRecord() {
+  const r = curRec(); if (!r || !r.is_test) return;
+  const name = (r.freshdesk_ticket ? '#' + r.freshdesk_ticket + ' · ' : '') + (r.customer_name || 'this repair') + (r.model ? ' · ' + r.model : '');
+  if (!confirm('Delete the test record ' + name + '?\n\nIts history, photos, survey and label PDF are deleted too. This can’t be undone.')) return;
+  try {
+    const out = await api('/repair-record/delete-test', { record_id: r.id });
+    records = records.filter(x => x.id !== r.id);
+    view = 'list'; openRecordId = null; renderList();
+    toast('Test record deleted' + (out.note ? out.note : ''));
+  } catch (e) { toast('Not deleted: ' + e.message, true); }
 }
 async function backToList() { if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); } view = 'list'; openRecordId = null; renderList(); }
 
