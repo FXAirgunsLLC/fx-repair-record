@@ -2383,14 +2383,16 @@ async function qDecide(kind) {
     await logEvent(r.id, 'step', 'Quote ' + kind.toLowerCase() + ' by the customer (' + usd(total) + ')' + (note ? '. Note: ' + note : '') + '. Moved to ' + target +
       ' · 14-day clock running again (paused ' + daysTxt(paused / DAY) + ')');
     recTab = approved ? RT_TAB : 'Report'; sendMsg = null;
+    await notifyQuoteNeeded(r, approved ? 'approved' : 'declined');
     await loadEvents(r.id); renderRecord(true); window.scrollTo(0, 0);
     toast(approved ? 'Approved. Now at Repair & testing.' : 'Declined. Now at Ready to ship.');
   }
 }
-// Teams card in Workflow Tasks when a repair reaches Quote (doesn't block anything if it fails)
-async function notifyQuoteNeeded(r) {
-  try { await api('/repair-record/quote-needed', { record_id: r.id, app_url: location.origin + location.pathname + '#r=' + r.id }); }
-  catch (e) { toast('Teams “Quote needed” message not sent: ' + e.message, true); }
+// Teams cards in Workflow Tasks: "Quote needed" when a repair reaches Quote, "Quote approved" /
+// "Quote declined" when the customer answers (doesn't block anything if it fails)
+async function notifyQuoteNeeded(r, kind) {
+  try { await api('/repair-record/quote-needed', { record_id: r.id, kind: kind || 'needed', app_url: location.origin + location.pathname + '#r=' + r.id }); }
+  catch (e) { toast('Teams message not sent: ' + e.message, true); }
 }
 function approvedQuoteBox(r) {
   if (r.quote_status !== 'Approved') return '';
