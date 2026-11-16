@@ -1895,10 +1895,10 @@ async function openLabel(mode) {
   const from = (shipFrom.find(x => x.id === qs.from_id) || shipFrom.find(x => x.name === r.ship_from_name) || shipFrom.find(x => x.is_default) || shipFrom[0]).id;
   lbl = { res: r.ship_residential ?? (qs.residential ?? null), rates: null, pick: null, mode: forQuote ? 'quote' : 'label' };
   const inp = (id, label, val, extra) => `<label class="l">${label}<input id="lb-${id}" value="${esc(val || '')}" ${extra || ''} oninput="lbChanged()"></label>`;
-  document.getElementById('modal-body').innerHTML = forQuote ? `<h2>Return shipping price</h2>
+  document.getElementById('modal-body').innerHTML = (forQuote ? `<h2>Return shipping price</h2>
     <p class="note">For the quote: pick a service and its price goes on the quote as the return shipping line. Nothing is bought. The box and service are remembered for the label later.</p>` : `<h2>Create shipping label</h2>
     <p class="note">4×6 label, no signature, no insurance. FX’s phone goes on the label. The Freshdesk # prints as the reference.
-      Every label is real: FedEx bills FX’s account once it’s scanned; UPS and USPS come out of the ShipStation balance.</p>
+      Every label is real: FedEx bills FX’s account once it’s scanned; UPS and USPS come out of the ShipStation balance.</p>`) + `
     <label class="l">Ship from<select id="lb-from" onchange="lbChanged()">${shipFrom.map(f => `<option value="${esc(f.id)}" ${f.id === from ? 'selected' : ''}>${esc(f.name)} · ${esc(f.company)}, ${esc(f.city)} ${esc(f.state)}</option>`).join('')}</select></label>
     <div class="l" style="margin-top:6px;">Ship to: <b>${esc(r.customer_name || 'Customer')}</b>${r.address ? ` <span class="note">(page 1: ${esc(r.address)})</span>` : ''}</div>
     <div class="grid2">${inp('s1', 'Street', a.street1)}${inp('s2', 'Apt / suite (optional)', a.street2)}</div>
