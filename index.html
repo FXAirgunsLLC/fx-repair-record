@@ -228,14 +228,14 @@ const STEPS = ['Received', 'Assessment', 'Quote', 'Repair', 'QC', 'Ready to ship
 const RT_TAB = 'Repair & testing';
 function stepName(s) { return s === 'Repair' || s === 'Testing' ? RT_TAB : s; }
 function normStep(r) { if (r && r.step === 'Testing') r.step = 'Repair'; return r; }
-const HOLD_REASONS = ['Waiting on customer approval', 'Waiting on parts from Sweden', 'Waiting on payment', 'Needs more diagnosis', 'Shop backlog', 'Other'];
+const HOLD_REASONS = ['Waiting on parts from Sweden', 'Waiting on payment', 'Needs more diagnosis', 'Shop backlog', 'Other'];
 const CLOCK_DAYS = 14;
 // Velocity standards are off for now: techs make the Pass/Fail call. Set to true to bring them back.
 const STANDARDS_ON = false;
 // The tab always follows the step
-const STEP_TAB = { 'Received': 'Assessment', 'Assessment': 'Assessment', 'Quote': 'Assessment', 'Repair': RT_TAB, 'QC': 'QC', 'Ready to ship': 'Report', 'Shipped': 'Report' };
+const STEP_TAB = { 'Received': 'Assessment', 'Assessment': 'Assessment', 'Quote': 'Quote', 'Repair': RT_TAB, 'QC': 'QC', 'Ready to ship': 'Report', 'Shipped': 'Report' };
 // Steps that move on only with the "done" button inside their tab (so who/when is recorded)
-const DONE_IN_TAB = { 'Assessment': 'Finish it with the button at the bottom of the Assessment tab.', 'Repair': 'Finish it at the bottom of the Repair & testing tab.', 'QC': 'Sign off at the bottom of the QC tab.', 'Ready to ship': 'Add the tracking # (or create a label) under Return shipment and send the report. Shipped is stamped from tracking.' };
+const DONE_IN_TAB = { 'Assessment': 'Finish it with the button at the bottom of the Assessment tab.', 'Quote': 'Send the quote, then click Approved or Declined when the customer answers.', 'Repair': 'Finish it at the bottom of the Repair & testing tab.', 'QC': 'Sign off at the bottom of the QC tab.', 'Ready to ship': 'Add the tracking # (or create a label) under Return shipment and send the report. Shipped is stamped from tracking.' };
 const CARRIERS = ['FedEx', 'UPS', 'USPS', 'Other', 'Customer pickup'];
 const SURVEY_DAYS = 5;
 function trackUrl(carrier, n) {
@@ -305,14 +305,29 @@ function isoToDate(iso) { if (!iso) return ''; const d = new Date(iso); return d
 function splitModel(m) { m = String(m || '').trim(); const k = m.match(/^(.*?)\s*\(([^)]*)\)\s*$/); return k ? { model: k[1].trim(), cal: k[2].trim() } : { model: m, cal: '' }; }
 function rqWarranty(w) { w = String(w || '').toLowerCase(); return (w === 'warr' || w === 'warranty') ? 'Yes' : w === 'oop' ? 'No' : ''; }
 
-// 14-day clock. Never pauses; stops when the rifle has shipped.
+// 14-day clock. Pauses only while the repair is at Quote (from the assessment moving to Quote until
+// Approved/Declined); stops when the rifle has shipped.
+function pausedMs(r, end) {
+  const running = r.quote_pause_since ? Math.max(0, (end || Date.now()) - new Date(r.quote_pause_since).getTime()) : 0;
+  return (Number(r.clock_paused_ms) || 0) + running;
+}
 function clockOf(r) {
   if (!r || !r.received_at) return null;
   const start = new Date(r.received_at).getTime();
   const end = r.step === 'Shipped' && r.step_times && r.step_times.Shipped ? new Date(r.step_times.Shipped).getTime() : Date.now();
-  const day = Math.max(1, Math.floor((end - start) / DAY) + 1);
-  return { day, due: new Date(start + CLOCK_DAYS * DAY), late: day > CLOCK_DAYS, warn: day >= 10 && day <= CLOCK_DAYS, done: r.step === 'Shipped' };
+  const paused = pausedMs(r, end);
+  const day = Math.max(1, Math.floor((end - start - paused) / DAY) + 1);
+  return { day, due: new Date(start + CLOCK_DAYS * DAY + paused), late: day > CLOCK_DAYS, warn: day >= 10 && day <= CLOCK_DAYS, done: r.step === 'Shipped',
+    paused: !!r.quote_pause_since && r.step !== 'Shipped', pausedDays: paused / DAY };
 }
+// Entering Quote starts the pause; leaving it (any direction) adds the paused time to the total
+function pausePatch(r, target) {
+  const now = Date.now(), p = {};
+  if (target === 'Quote' && !r.quote_pause_since) p.quote_pause_since = new Date(now).toISOString();
+  if (target !== 'Quote' && r.quote_pause_since) { p.clock_paused_ms = (Number(r.clock_paused_ms) || 0) + Math.max(0, now - new Date(r.quote_pause_since).getTime()); p.quote_pause_since = null; }
+  return p;
+}
+function daysTxt(d) { d = Math.max(0, d); return d < 1 ? 'under a day' : (Math.round(d * 10) / 10) + (Math.round(d * 10) / 10 === 1 ? ' day' : ' days'); }
 function siblingsHtml(r) {
   const sib = r.freshdesk_ticket ? records.filter(x => x.id !== r.id && x.freshdesk_ticket === r.freshdesk_ticket) : [];
   return sib.length ? `<div class="note" style="margin-top:4px;">Also on ticket #${esc(r.freshdesk_ticket)}: ${sib.map(x => `<a href="#" onclick="event.preventDefault();openRecord('${x.id}')">${esc(x.customer_name || 'repair')}${x.model ? ' · ' + esc(x.model) : ''}${x.serial_number ? ' (SN ' + esc(x.serial_number) + ')' : ''}</a>`).join(', ')}</div>` : '';
@@ -403,7 +418,9 @@ function stepCell(r) {
   const c = clockOf(r);
   let h = `<span class="pill step">${esc(stepName(r.step || 'Received'))}</span>`;
   if (r.hold_reason) h += ` <span class="pill hold">On hold</span>`;
-  if (c) h += ` <span class="pill ${c.late ? 'late' : ''}">${c.done ? c.day + ' days total' : 'Day ' + c.day + ' of ' + CLOCK_DAYS}</span>`;
+  if (r.step === 'Quote') h += ` <span class="pill hold">${r.quote_status === 'Sent' ? 'Quote sent' : 'Needs quote'}</span>`;
+  if (r.quote_status === 'Declined') h += ` <span class="pill">Quote declined</span>`;
+  if (c) h += ` <span class="pill ${c.late ? 'late' : ''}">${c.done ? c.day + ' days total' : 'Day ' + c.day + ' of ' + CLOCK_DAYS}${c.paused ? ' · paused' : ''}</span>`;
   if (r.delivered_at) h += ` <span class="pill step">Delivered ${fmtDate(r.delivered_at)}</span>`;
   else if (r.return_tracking) h += ` <span class="pill">${esc(r.ship_status || 'Tracking added')}</span>`;
   return h;
@@ -455,7 +472,8 @@ function exportExcel() {
       'Ticket #': r.freshdesk_ticket ? Number(r.freshdesk_ticket) : '', 'Customer': r.customer_name || '', 'Email': r.email || '', 'Phone': r.phone || '',
       'Model': r.model || '', 'Serial': r.serial_number || '', 'Caliber': r.caliber || '', 'Barrel': r.barrel_length || '', 'Warranty': r.warranty || '',
       'Test record': r.is_test ? 'Yes' : 'No', 'Received': xDate(r.received_at), 'Step': stepName(r.step || 'Received'), 'On hold': r.hold_reason || '',
-      'Days (received to shipped, or so far)': c ? c.day : '', 'Past 14 days': c ? (c.late ? 'Yes' : 'No') : '',
+      'Days (received to shipped, or so far)': c ? c.day : '', 'Past 14 days': c ? (c.late ? 'Yes' : 'No') : '', 'Clock paused at Quote (days)': c ? Math.round(c.pausedDays * 10) / 10 : '',
+      'Quote': r.quote_status || (r.step === 'Quote' ? 'Not sent' : ''), 'Quote total': r.quote_total != null ? Number(r.quote_total) : '', 'Quote sent': xDate(r.quote_first_sent_at), 'Quote answered': xDate(r.quote_decided_at),
       'Safety check': !S.status ? '' : (S.history || []).length ? 'Concern found' + (lastSafety && lastSafety.lifted_at ? ' (hold lifted)' : ' (on hold)') : 'No concern',
       'Safety notes': (S.history || []).map(x => x.note + (x.lifted_at ? ' → ' + (x.approver || '') + ': ' + (x.decision || '') : '')).join(' | '),
       'Reported issue': r.issue || '', 'Overall assessment': ((a.G || {}).v || {}).overall || '', 'Assessed by': fullName(r.assessed_by), 'Assessed': xDate(r.assessed_at),
@@ -511,13 +529,20 @@ function renderDash(el) {
   const holdList = Object.entries(holds).sort((a, b) => b[1].days - a[1].days);
   const maxHold = Math.max(1, ...holdList.map(([, h]) => h.days));
   const risk = open.filter(r => clockOf(r).day >= 10).sort((a, b) => clockOf(b).day - clockOf(a).day);
+  // Quotes: who the paused time is on (FX writing the quote vs. the customer answering)
+  const needQ = open.filter(r => r.step === 'Quote' && r.quote_status !== 'Sent'), waitQ = open.filter(r => r.step === 'Quote' && r.quote_status === 'Sent');
+  const qDone = inRange.filter(r => r.quote_status === 'Approved' || r.quote_status === 'Declined');
+  const avgOf = xs => xs.length ? (xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(1) : '—';
+  const prep = inRange.filter(r => r.quote_first_sent_at && (r.step_times || {}).Quote).map(r => daysBetween(r.step_times.Quote, r.quote_first_sent_at)).filter(d => d >= 0);
+  const wait = qDone.filter(r => r.quote_first_sent_at).map(r => daysBetween(r.quote_first_sent_at, r.quote_decided_at)).filter(d => d >= 0);
   const pipeSteps = STEPS.filter(x => x !== 'Shipped');
   let h = `<div class="bar" style="justify-content:space-between;margin-bottom:12px;"><span class="note">Open repairs are shown whatever their date. Turnaround, step times and holds use repairs received in the period.</span>
     <span class="bar" style="gap:8px;"><button class="btn sm" onclick="exportExcel()">Export to Excel</button><label class="l" style="flex-direction:row;align-items:center;gap:8px;">Period <select style="width:auto;" onchange="dashRange=this.value;renderRows()">${[['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['all', 'All time']].map(([v, l]) => `<option value="${v}" ${dashRange === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></span></div>
   <div class="kpis"><div class="kpi"><b>${open.length}</b><span class="note">open repairs</span></div>
     <div class="kpi"><b style="color:${late.length ? 'var(--red)' : 'inherit'}">${late.length}</b><span class="note">past ${CLOCK_DAYS} days</span></div>
     <div class="kpi"><b>${onTime}</b><span class="note">shipped within ${CLOCK_DAYS} days (${turn.length} shipped)</span></div>
-    <div class="kpi"><b>${avgTurn}</b><span class="note">average days, received to shipped</span></div></div>
+    <div class="kpi"><b>${avgTurn}</b><span class="note">average days, received to shipped</span></div>
+    <div class="kpi"><b style="color:${needQ.length ? 'var(--warn)' : 'inherit'}">${needQ.length}</b><span class="note">need a quote${waitQ.length ? ` · ${waitQ.length} waiting on the customer` : ''}</span></div></div>
   <div class="card" style="margin-bottom:14px;"><h2 style="margin-bottom:10px;">Where open repairs are</h2><div class="pipe">${pipeSteps.map(x => {
       const n = open.filter(r => (r.step || 'Received') === x).length, hl = open.filter(r => (r.step || 'Received') === x && r.hold_reason).length;
       return `<div><b>${n}</b><span class="note">${esc(stepName(x))}${hl ? ` · <span style="color:var(--warn)">${hl} on hold</span>` : ''}</span></div>`; }).join('')}</div></div>
@@ -526,6 +551,11 @@ function renderDash(el) {
       ${Object.keys(per).length ? `<table><tbody>${STEPS.filter(x => per[x]).map(x => { const a = per[x].reduce((p, q) => p + q, 0) / per[x].length; return `<tr><td>${esc(stepName(x))}</td><td class="num" style="font-size:18px;">${a.toFixed(1)}</td><td class="note">${per[x].length} repair${per[x].length > 1 ? 's' : ''}</td></tr>`; }).join('')}</tbody></table>` : '<span class="note">Not enough finished steps yet.</span>'}</div>
     <div class="card" style="flex:1 1 420px;"><h2 style="margin-bottom:8px;">What holds repairs up</h2>
       ${holdList.length ? `<table><thead><tr><th>Hold reason</th><th>Times</th><th>Total days</th><th></th></tr></thead><tbody>${holdList.map(([k, v]) => `<tr><td>${esc(k)}${v.open ? ` <span class="pill hold">${v.open} now</span>` : ''}</td><td>${v.n}</td><td class="num" style="font-size:18px;">${v.days.toFixed(1)}</td><td style="width:30%;"><div class="hbar"><div style="width:${Math.round(v.days / maxHold * 100)}%"></div></div></td></tr>`).join('')}</tbody></table>` : '<span class="note">No holds in this period.</span>'}</div></div>
+  <div class="card" style="margin-top:14px;"><h2 style="margin-bottom:8px;">Quotes <span class="note">(the 14-day clock is paused at Quote)</span></h2>
+    <table><tbody><tr><td>Days from assessment to quote sent (FX)</td><td class="num" style="font-size:18px;">${avgOf(prep)}</td><td class="note">${prep.length} quote${prep.length === 1 ? '' : 's'}</td></tr>
+      <tr><td>Days waiting on the customer’s answer</td><td class="num" style="font-size:18px;">${avgOf(wait)}</td><td class="note">${wait.length} answered</td></tr>
+      <tr><td>Approved / declined</td><td class="num" style="font-size:18px;">${qDone.filter(r => r.quote_status === 'Approved').length} / ${qDone.filter(r => r.quote_status === 'Declined').length}</td><td class="note">in this period</td></tr></tbody></table>
+    ${needQ.length + waitQ.length ? `<table style="margin-top:10px;"><thead><tr><th>Ticket #</th><th>Customer</th><th>Model</th><th>Quote</th><th>Since</th></tr></thead><tbody>${needQ.concat(waitQ).map(r => `<tr class="row" onclick="openRecord('${r.id}')"><td>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) : '—'}</td><td>${esc(r.customer_name || '')}${r.is_test ? ' <span class="pill test">TEST</span>' : ''}</td><td>${esc(r.model || '')}</td><td><span class="pill hold">${r.quote_status === 'Sent' ? 'Sent, waiting' : 'Needs quote'}</span></td><td>${fmtDate(r.quote_status === 'Sent' ? r.quote_sent_at : ((r.step_times || {}).Quote || r.quote_pause_since))}</td></tr>`).join('')}</tbody></table>` : ''}</div>
   <div class="card" style="margin-top:14px;"><h2 style="margin-bottom:8px;">Late or close to late (day 10+)</h2>
     ${risk.length ? `<table><thead><tr><th>Day</th><th>Ticket #</th><th>Customer</th><th>Model</th><th>Step</th><th>Hold</th></tr></thead><tbody>${risk.map(r => { const c = clockOf(r);
       return `<tr class="row" onclick="openRecord('${r.id}')"><td class="num" style="font-size:19px;color:${c.late ? 'var(--red)' : 'var(--warn)'};">${c.day}</td><td>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) : '—'}</td><td>${esc(r.customer_name || '')}${r.is_test ? ' <span class="pill test">TEST</span>' : ''}</td><td>${esc(r.model || '')}</td><td>${esc(stepName(r.step || ''))}</td><td>${r.hold_reason ? `<span class="pill hold">${esc(r.hold_reason)}</span>` : ''}</td></tr>`; }).join('')}</tbody></table>` : '<span class="note">Nothing at day 10 or later. Nice.</span>'}</div>`;
@@ -707,7 +737,7 @@ function renderRecord(keepScroll) {
     <div class="card" style="margin-top:14px;">
       <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}"><b>${esc(stepName(s))}</b><span>${st[s] ? fmtDate(st[s]) : (i === si ? 'now' : '')}</span></div>`).join('')}</div>
       ${c ? `<div class="clock"><div class="track ${c.late ? 'late' : c.warn ? 'warn' : ''}"><div style="width:${Math.min(100, c.day / CLOCK_DAYS * 100)}%"></div></div>
-        <b>${c.done ? 'Shipped on day ' + c.day : 'Day ' + c.day + ' of ' + CLOCK_DAYS}</b><span class="muted">Received ${fmtDate(r.received_at)} · due ${fmtDate(c.due.toISOString())}${c.late && !c.done ? ' · late' : ''}</span></div>`
+        <b>${c.done ? 'Shipped on day ' + c.day : 'Day ' + c.day + ' of ' + CLOCK_DAYS}${c.paused ? ' · paused' : ''}</b><span class="muted">Received ${fmtDate(r.received_at)} · due ${fmtDate(c.due.toISOString())}${c.late && !c.done ? ' · late' : ''}${c.paused ? ' · paused at Quote since ' + fmtDate(r.quote_pause_since) : ''}${c.pausedDays >= 0.05 ? ' · ' + daysTxt(c.pausedDays) + ' paused for the quote' : ''}</span></div>`
         : `<div class="clock"><span class="muted">The 14-day clock starts when the rifle is received.</span><input type="date" id="rec-date" value="${isoToDate(new Date().toISOString())}" style="width:auto;"><button class="btn sm" onclick="setReceived()">Mark received</button></div>`}
       <div class="bar" style="margin-top:12px;">
         ${si > 0 && !onSafetyHold(r) ? `<button class="btn sm ghost" onclick="moveStep(-1)">← Back to ${esc(stepName(STEPS[si - 1]))}</button>` : ''}
@@ -721,7 +751,7 @@ function renderRecord(keepScroll) {
     <div class="layout">
       <div class="mainc">
         ${renderTabs(r)}
-        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${onSafetyHold(r) && recTab !== 'Assessment' ? `<div class="card"><b>On safety hold</b><span class="note">Nothing can be done on this rifle until management has advised and the hold is lifted.</span><div><button class="btn sm" onclick="goTab('Assessment')">Go to the safety check</button></div></div>` : recTab === 'Assessment' ? renderAssessment(r) : recTab === RT_TAB ? renderRepairTesting(r) : recTab === 'QC' ? renderQC(r) : recTab === 'Report' ? renderReport(r) : '<div class="soon">Coming in a later install.</div>'}</div>
+        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${onSafetyHold(r) && recTab !== 'Assessment' ? `<div class="card"><b>On safety hold</b><span class="note">Nothing can be done on this rifle until management has advised and the hold is lifted.</span><div><button class="btn sm" onclick="goTab('Assessment')">Go to the safety check</button></div></div>` : recTab === 'Assessment' ? renderAssessment(r) : recTab === 'Quote' ? renderQuote(r) : recTab === RT_TAB ? renderRepairTesting(r) : recTab === 'QC' ? renderQC(r) : recTab === 'Report' ? renderReport(r) : '<div class="soon">Coming in a later install.</div>'}</div>
         <div class="card"><h2 style="margin-bottom:8px;">History</h2><ul class="hist">${events.length ? events.map(e => `<li>${esc(e.text)}<div class="when">${esc(e.by_email === 'system' ? 'Automatic' : nameOf(e.by_email))}, ${fmtDT(e.at)}</div></li>`).join('') : '<li class="muted">No history yet.</li>'}</ul></div>
       </div>
       <div class="side">
@@ -834,8 +864,10 @@ async function moveStep(dir, to) {
   if (dir > 0 && !r.received_at) return toast('Mark it received first.', true);
   const st = Object.assign({}, r.step_times || {});
   if (dir > 0 || to) st[target] = new Date().toISOString();
-  if (await patchRecord({ step: target, step_times: st })) {
-    await logEvent(r.id, 'step', (dir < 0 ? 'Moved back to ' : 'Moved to ') + target);
+  const from = r.step;
+  if (await patchRecord(Object.assign({ step: target, step_times: st }, pausePatch(r, target)))) {
+    await logEvent(r.id, 'step', (dir < 0 ? 'Moved back to ' : 'Moved to ') + target + (target === 'Quote' ? ' · 14-day clock paused' : from === 'Quote' ? ' · 14-day clock running again' : ''));
+    if (target === 'Quote' && dir > 0) notifyQuoteNeeded(r);
     recTab = STEP_TAB[target] || recTab;
     await loadEvents(r.id); renderRecord(true);
     toast('Now at ' + stepName(target));
@@ -1040,9 +1072,11 @@ function secStatus(r, s) {
   return missing === 0 ? 'done' : touched ? 'partial' : 'empty';
 }
 
+function hasQuoteTab(r) { return r.step === 'Quote' || !!r.quote_status || r.warranty !== 'Yes'; }
 function renderTabs(r) {
-  const avail = { 'Assessment': true, [RT_TAB]: true, 'QC': true, 'Report': true };
-  return `<div class="tabs" style="margin-bottom:0;">${['Assessment', RT_TAB, 'QC', 'Report'].map(t =>
+  const avail = { 'Assessment': true, 'Quote': true, [RT_TAB]: true, 'QC': true, 'Report': true };
+  const list = ['Assessment'].concat(hasQuoteTab(r) ? ['Quote'] : [], [RT_TAB, 'QC', 'Report']);
+  return `<div class="tabs" style="margin-bottom:0;">${list.map(t =>
     `<button class="tab ${recTab === t ? 'on' : ''}" ${avail[t] ? `onclick="recTab='${t}';renderRecord(true)"` : 'disabled title="Coming in a later install"'}>${t}${STEP_TAB[r.step] === t ? '<span class="here" title="Current step"></span>' : ''}</button>`).join('')}</div>`;
 }
 function renderAssessment(r) {
@@ -1143,9 +1177,10 @@ async function finishAssessment(next) {
   if (saveTimer) { clearTimeout(saveTimer); await saveAssessment(); }
   const patch = { assessed_by: me, assessed_at: new Date().toISOString() };
   const si = Math.max(0, STEPS.indexOf(r.step));
-  if (si < STEPS.indexOf(next)) { const st = Object.assign({}, r.step_times || {}); st.Assessment = st.Assessment || patch.assessed_at; st[next] = patch.assessed_at; patch.step = next; patch.step_times = st; }
+  if (si < STEPS.indexOf(next)) { const st = Object.assign({}, r.step_times || {}); st.Assessment = st.Assessment || patch.assessed_at; st[next] = patch.assessed_at; patch.step = next; patch.step_times = st; Object.assign(patch, pausePatch(r, next)); }
   if (await patchRecord(patch)) {
-    await logEvent(r.id, 'step', 'Assessment finished' + (patch.step ? ', moved to ' + next : ''));
+    await logEvent(r.id, 'step', 'Assessment finished' + (patch.step ? ', moved to ' + next : '') + (patch.step === 'Quote' ? ' · 14-day clock paused' : ''));
+    if (patch.step === 'Quote') notifyQuoteNeeded(r);
     recTab = STEP_TAB[r.step] || recTab;
     await loadEvents(r.id); renderRecord(true); window.scrollTo(0, 0); toast('Assessment finished');
   }
@@ -1506,7 +1541,7 @@ function renderRepairTesting(r) {
   const k = rtReady(r);
   const done = r.repaired_at && r.tested_at;
   return `<div class="bar" style="justify-content:space-between;"><span>${done ? `Repair &amp; testing marked done by <b>${esc(nameOf(r.tested_by || r.repaired_by))}</b> on ${fmtDate(r.tested_at || r.repaired_at)}` : 'What was done, then the test results. The work and test results go on the Service Report.'}</span><span class="note" id="as-status">Saves automatically</span></div>
-    <h2 style="margin-top:6px;">Repair</h2>${renderWork(r)}${renderTesting(r)}
+    ${approvedQuoteBox(r)}<h2 style="margin-top:6px;">Repair</h2>${renderWork(r)}${renderTesting(r)}
     <div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Finish repair &amp; testing</b><span class="note" id="t-why">${k.ok ? 'Ready.' : esc(k.why)}</span>
       <div class="bar"><button class="btn primary" id="t-done" ${k.ok ? '' : 'disabled'} onclick="finishRepairTesting()">Repair &amp; testing done → QC</button></div></div>`;
 }
@@ -1697,6 +1732,7 @@ let sendMsg = null;           // message being edited for the Freshdesk reply
 function reportReady(r) {
   const miss = [];
   if (!r.assessed_at) miss.push('assessment');
+  if (r.quote_status === 'Declined') return miss;      // returned without repair: no work, testing or QC
   if (!r.repaired_at) miss.push('work performed');
   if (!r.tested_at) miss.push('testing');
   if (!r.qc_at) miss.push('QC');
@@ -1725,7 +1761,7 @@ function reportHtml(r) {
     <div class="rhead"><img src="${FX_LOGO}" alt="FX Airguns" style="height:34px;"><div style="text-align:right;"><div class="rtitle">SERVICE REPORT</div>
       <div>${r.freshdesk_ticket ? 'Ticket #' + esc(r.freshdesk_ticket) + ' · ' : ''}${fmtDate(r.qc_at || today)}</div></div></div>
     <h3>Customer &amp; rifle</h3>
-    <div class="kv">${kv('Customer', r.customer_name)}${kv('Model', r.model ? (/^fx/i.test(r.model) ? r.model : 'FX ' + r.model) : '')}${kv('Email', r.email)}${kv('Serial #', r.serial_number)}${kv('Phone', r.phone)}${kv('Caliber', r.caliber)}${kv('Received', fmtDate(r.received_at))}${kv('Barrel length', r.barrel_length)}${kv('Completed', fmtDate(r.qc_at || today))}${kv('Warranty', warr)}${r.return_tracking ? kv('Return shipment', (r.ship_carrier || 'FedEx') + ' ' + r.return_tracking) : ''}</div>`;
+    <div class="kv">${kv('Customer', r.customer_name)}${kv('Model', r.model ? (/^fx/i.test(r.model) ? r.model : 'FX ' + r.model) : '')}${kv('Email', r.email)}${kv('Serial #', r.serial_number)}${kv('Phone', r.phone)}${kv('Caliber', r.caliber)}${kv('Received', fmtDate(r.received_at))}${kv('Barrel length', r.barrel_length)}${r.quote_status === 'Declined' ? kv('Inspected', fmtDate(r.assessed_at)) : kv('Completed', fmtDate(r.qc_at || today))}${kv('Warranty', warr)}${r.return_tracking ? kv('Return shipment', (r.ship_carrier || 'FedEx') + ' ' + r.return_tracking) : ''}</div>`;
   if (r.issue) h += `<h3>What you told us</h3><div class="say">${esc(r.issue)}</div>`;
   // As-received assessment: every row (customer sections only)
   h += `<h3>Assessment as received</h3><p style="margin:0 0 6px;color:#5a6168;">Recorded when the rifle arrived, before any adjustment, cleaning or repair.</p>`;
@@ -1737,6 +1773,12 @@ function reportHtml(r) {
     if (s.id === 'F' && d.v.measurements) rows += `<tr><td>Measurements</td><td>${esc(d.v.measurements)}</td></tr>`;
     h += `<div class="rep-avoid"><h4>${s.id} · ${esc(s.title)}</h4><table>${rows}</table>${String(d.text || '').trim() ? `<div class="say">${esc(d.text)}</div>` : ''}${repPics(s.id)}</div>`;
   });
+  if (r.quote_status === 'Declined') {
+    h += `<div class="rep-avoid"><h3>Returned without repair</h3><div class="say">You chose not to go ahead with the repair, so no work was done. Your rifle is being returned in the condition described above.</div></div>
+      <div class="rep-avoid"><h3>Sign-off</h3><div class="sig"><div><b>Assessed by</b><br>${esc(fullName(r.assessed_by) || '—')}<br>${fmtDate(r.assessed_at)}</div></div>
+      <div class="foot">FX Airguns · Questions about this report? Reply to your support ticket${r.freshdesk_ticket ? ' #' + esc(r.freshdesk_ticket) : ''} and our team will help.</div></div>`;
+    return h + '</div>';
+  }
   // Work performed
   h += `<div class="rep-avoid"><h3>Work performed</h3><div class="say">${esc(String(w.text || '').trim() || String(w.raw || '').trim() || '—')}</div>`;
   const parts = (w.parts || []).filter(p => String(p.desc || p.pn || '').trim());
@@ -1769,6 +1811,7 @@ function defaultMessage(r) {
   const carrier = r.ship_carrier || 'FedEx', url = trackUrl(carrier, r.return_tracking);
   const ship = carrier === 'Customer pickup' ? '\n\nYour rifle is ready for pickup.'
     : r.return_tracking ? `\n\nYour rifle is on its way back to you. ${carrier} tracking number: ${r.return_tracking}${url ? '\n' + url : ''}` : '';
+  if (r.quote_status === 'Declined') return `Hi ${first},\n\nAs you asked, we’re returning your ${model}${r.serial_number ? ' (serial ' + r.serial_number + ')' : ''} without repair.\n\nYour Service Report is attached. It shows what we found when the rifle arrived.${ship}\n\nThank you,\nFX Airguns Service Team`;
   return `Hi ${first},\n\nThe repair on your ${model}${r.serial_number ? ' (serial ' + r.serial_number + ')' : ''} is complete and it has passed our final quality check.\n\nYour Service Report is attached. It shows what we found when the rifle arrived, the work we did, and the test results.${ship}\n\nThank you for your patience,\nFX Airguns Service Team`;
 }
 function surveyDueText(r) {
@@ -1840,18 +1883,20 @@ function labelLine(r) {
     ${r.ship_label_id && !r.ship_label_path ? '<span class="note">PDF not saved here. Print it from ShipStation.</span>' : ''}</div>`;
 }
 let lbl = null;   // the label form while it's open
-async function openLabel() {
+async function openLabel(mode) {
   const r = curRec(); if (!r) return;
+  const forQuote = mode === 'quote', qs = (forQuote || !r.ship_label_id) && r.quote && r.quote.ship ? r.quote.ship : {};
   if (!shipFrom.length) {
     try { shipFrom = (await api('/ship/from')).from || []; }
     catch (e) { return toast('Could not load the ShipStation ship-from locations: ' + e.message, true); }
     if (!shipFrom.length) return toast('No Ship From Locations in ShipStation.', true);
   }
   const a = r.ship_street1 ? { street1: r.ship_street1, street2: r.ship_street2 || '', city: r.ship_city || '', state: r.ship_state || '', zip: r.ship_zip || '' } : splitAddress(r.address);
-  const from = (shipFrom.find(x => x.name === r.ship_from_name) || shipFrom.find(x => x.is_default) || shipFrom[0]).id;
-  lbl = { res: r.ship_residential ?? null, rates: null, pick: null };
+  const from = (shipFrom.find(x => x.id === qs.from_id) || shipFrom.find(x => x.name === r.ship_from_name) || shipFrom.find(x => x.is_default) || shipFrom[0]).id;
+  lbl = { res: r.ship_residential ?? (qs.residential ?? null), rates: null, pick: null, mode: forQuote ? 'quote' : 'label' };
   const inp = (id, label, val, extra) => `<label class="l">${label}<input id="lb-${id}" value="${esc(val || '')}" ${extra || ''} oninput="lbChanged()"></label>`;
-  document.getElementById('modal-body').innerHTML = `<h2>Create shipping label</h2>
+  document.getElementById('modal-body').innerHTML = forQuote ? `<h2>Return shipping price</h2>
+    <p class="note">For the quote: pick a service and its price goes on the quote as the return shipping line. Nothing is bought. The box and service are remembered for the label later.</p>` : `<h2>Create shipping label</h2>
     <p class="note">4×6 label, no signature, no insurance. FX’s phone goes on the label. The Freshdesk # prints as the reference.
       Every label is real: FedEx bills FX’s account once it’s scanned; UPS and USPS come out of the ShipStation balance.</p>
     <label class="l">Ship from<select id="lb-from" onchange="lbChanged()">${shipFrom.map(f => `<option value="${esc(f.id)}" ${f.id === from ? 'selected' : ''}>${esc(f.name)} · ${esc(f.company)}, ${esc(f.city)} ${esc(f.state)}</option>`).join('')}</select></label>
@@ -1860,11 +1905,11 @@ async function openLabel() {
     <div class="grid4" style="grid-template-columns:2fr 70px 110px;">${inp('city', 'City', a.city)}${inp('st', 'State', a.state, 'maxlength="2" style="text-transform:uppercase;"')}${inp('zip', 'ZIP', a.zip, 'inputmode="numeric"')}</div>
     <div class="bar"><button class="btn sm" id="lb-chk" onclick="lbCheck()">Check address</button><span class="note" id="lb-amsg" role="status"></span></div>
     <div class="l">Address type<div class="bar" id="lb-res">${lbResButtons()}</div></div>
-    <div class="grid4">${inp('wt', 'Weight (lb)', '', 'inputmode="decimal"')}${inp('L', 'Length (in)', '', 'inputmode="numeric"')}${inp('W', 'Width (in)', '', 'inputmode="numeric"')}${inp('H', 'Height (in)', '', 'inputmode="numeric"')}</div>
+    <div class="grid4">${inp('wt', 'Weight (lb)', qs.weight, 'inputmode="decimal"')}${inp('L', 'Length (in)', qs.length, 'inputmode="numeric"')}${inp('W', 'Width (in)', qs.width, 'inputmode="numeric"')}${inp('H', 'Height (in)', qs.height, 'inputmode="numeric"')}</div>
     <div class="bar"><button class="btn sm" id="lb-rt" onclick="lbRates()">See prices</button><span class="note">FedEx, UPS and USPS, cheapest first. Internal only, never on the Service Report.</span></div>
     <div id="lb-rates"></div>
     <p class="note" id="lb-why" role="status"></p>
-    <div class="bar"><button class="btn primary" id="lb-go" onclick="lbCreate()">Create label</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
+    <div class="bar"><button class="btn primary" id="lb-go" onclick="${forQuote ? 'lbUseForQuote()' : 'lbCreate()'}">${forQuote ? 'Add to quote' : 'Create label'}</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
   document.getElementById('modal').classList.add('open');
   lbWhy();
 }
@@ -2071,16 +2116,17 @@ function reportFileName(r) {
   const clean = x => String(x || '').replace(/[\\/:*?"<>|#%]/g, '').replace(/\s+/g, ' ').trim();
   return clean(`Service Report - ${r.freshdesk_ticket ? '#' + r.freshdesk_ticket + ' - ' : ''}${r.customer_name || 'Customer'}`) + '.pdf';
 }
-async function makePdf(r, mode) {
+async function makePdf(r, mode, kind) {
   if (!window.html2pdf) throw new Error('The PDF tool did not load. Refresh the page and try again.');
-  await loadPhotos(r.id);                     // fresh photo links
+  const isQuote = kind === 'quote';
+  if (!isQuote) await loadPhotos(r.id);       // fresh photo links
   const box = document.createElement('div');
   box.style.cssText = 'position:fixed;left:-10000px;top:0;';
-  box.innerHTML = reportHtml(r);
+  box.innerHTML = isQuote ? quoteHtml(r) : reportHtml(r);
   document.body.appendChild(box);
   try {
     const worker = html2pdf().set({
-      margin: [8, 8, 10, 8], filename: reportFileName(r),
+      margin: [8, 8, 10, 8], filename: isQuote ? quoteFileName(r) : reportFileName(r),
       image: { type: 'jpeg', quality: 0.86 },
       html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
       jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
@@ -2117,6 +2163,237 @@ async function sendReport(noTracking) {
   } catch (e) {
     note.textContent = 'Not sent: ' + e.message; btn.disabled = false; toast('Not sent: ' + e.message, true);
   }
+}
+
+// ── QUOTE ───────────────────────────────────────────────
+// Out-of-warranty repairs: Shyam writes the quote (lines typed in), sends it as a PDF on the Freshdesk
+// ticket, and clicks Approved or Declined when the customer replies. The 14-day clock is paused while
+// the repair is at Quote. The server works out the total from the saved lines when it sends.
+let qSaveTimer = null, qMsg = null, qMsgFor = null;
+function quoteOf(r) { const q = r.quote && typeof r.quote === 'object' ? r.quote : {}; if (!Array.isArray(q.lines)) q.lines = []; r.quote = q; return q; }
+function qNum(v) { const n = Number(String(v == null ? '' : v).replace(/[^0-9.]/g, '')); return String(v == null ? '' : v).trim() === '' || !isFinite(n) ? null : n; }
+function qQty(l) { const n = Number(l.qty); return n > 0 ? n : 1; }
+function qLineTotal(l) { const p = qNum(l.price); return p == null ? 0 : Math.round(p * qQty(l) * 100) / 100; }
+function qTotal(q) { return Math.round(q.lines.reduce((t, l) => t + qLineTotal(l), 0) * 100) / 100; }
+function usd(n) { return '$' + Number(n || 0).toFixed(2); }
+function quoteDecided(r) { return r.quote_status === 'Approved' || r.quote_status === 'Declined'; }
+function qLinesUsed(q) { return q.lines.filter(l => String(l.desc || l.pn || '').trim()); }
+function quoteProblem(r) {
+  const q = quoteOf(r), lines = qLinesUsed(q);
+  if (!lines.length) return 'Add at least one line.';
+  if (lines.some(l => qNum(l.price) == null)) return 'Every line needs a price.';
+  if (!String(q.summary || '').trim()) return 'Write “What we found” for the customer.';
+  if (!r.freshdesk_ticket) return 'Add the Freshdesk # on page 1 first.';
+  return '';
+}
+function quoteMessage(r) {
+  const first = String(r.customer_name || '').trim().split(/\s+/)[0] || 'there';
+  const model = r.model ? (/^fx/i.test(r.model) ? r.model : 'FX ' + r.model) : 'rifle';
+  return `Hi ${first},\n\nWe’ve inspected your ${model}${r.serial_number ? ' (serial ' + r.serial_number + ')' : ''} and put together a quote for the repair. It’s attached, with what we found and what the repair costs.\n\nTotal: ${usd(qTotal(quoteOf(r)))}\n\nPlease reply to this email to let us know whether you’d like us to go ahead with the repair, or have the rifle returned without repair.\n\nThank you,\nFX Airguns Service Team`;
+}
+function renderQuote(r) {
+  const q = quoteOf(r), locked = quoteDecided(r), atQuote = r.step === 'Quote', st = r.step_times || {};
+  if (qMsgFor !== r.id) { qMsg = null; qMsgFor = r.id; }
+  const dis = locked ? 'disabled' : '';
+  let h = '';
+  if (locked) {
+    h += `<div class="${r.quote_status === 'Approved' ? 'sentbox' : 'holdbox'}" style="display:flex;flex-direction:column;gap:4px;"><b>Quote ${r.quote_status.toLowerCase()} · ${usd(r.quote_total != null ? r.quote_total : qTotal(q))}</b>
+      <span>Recorded by ${esc(nameOf(r.quote_decided_by))} on ${fmtDT(r.quote_decided_at)}${r.quote_sent_at ? ` · quote${r.quote_version > 1 ? ' v' + r.quote_version : ''} sent ${fmtDate(r.quote_sent_at)}` : ' · quote not sent from here'}</span>
+      ${r.quote_decision_note ? `<span class="note">Note: ${esc(r.quote_decision_note)}</span>` : ''}
+      <span class="note">${r.quote_status === 'Approved' ? 'The repair moved to Repair &amp; testing.' : 'The rifle goes back without repair (Report tab: return shipment and Service Report).'}</span></div>`;
+  } else if (r.quote_status === 'Sent') {
+    const waited = (Date.now() - new Date(r.quote_sent_at).getTime()) / DAY;
+    h += `<div class="holdbox" style="display:flex;flex-direction:column;gap:4px;"><b>Quote${r.quote_version > 1 ? ' v' + r.quote_version : ''} sent · waiting on the customer for ${daysTxt(waited)}</b>
+      <span class="note" style="color:var(--warn);">Sent to Freshdesk #${esc(r.freshdesk_ticket)} by ${esc(nameOf(r.quote_sent_by))} on ${fmtDT(r.quote_sent_at)} · ${usd(r.quote_total)}. When they reply, click Approved or Declined below. Changing a line and sending again sends a revised quote.</span></div>`;
+  } else {
+    h += `<p class="note">${atQuote ? `Waiting for a quote since ${fmtDT(st.Quote || r.quote_pause_since)}. The 14-day clock is paused until the customer approves or declines.` : 'You can start the quote now. Sending, Approved and Declined open when the assessment is finished and the repair is at Quote.'}</p>`;
+  }
+  // The tech's repair plan, for reference (internal)
+  const H = (asOf(r).H || {}).v || {}, planParts = (Array.isArray(H.parts) ? H.parts : []).filter(p => String(p.desc || p.pn || '').trim());
+  h += `<div class="card" style="display:flex;flex-direction:column;gap:6px;"><h2>Tech’s repair plan <span class="pill">Internal only</span></h2>
+    <div style="white-space:pre-wrap;">${esc(String(H.notes || '').trim() || 'No notes in section H.')}</div>
+    ${planParts.length ? `<span class="note">Expected parts: ${planParts.map(p => esc((p.qty > 1 ? p.qty + ' x ' : '') + [p.desc, p.pn].filter(Boolean).join(' · '))).join('; ')}</span>` : ''}
+    ${r.assessed_at ? `<span class="note">Assessed by ${esc(nameOf(r.assessed_by))} on ${fmtDate(r.assessed_at)}</span>` : ''}</div>`;
+  // What we found (customer-facing)
+  h += `<div class="card" style="display:flex;flex-direction:column;gap:8px;"><h2>What we found</h2>
+    <span class="note">Goes on the quote. Plain words for the customer: what’s wrong and what the repair involves.</span>
+    <textarea id="q-sum" rows="4" ${dis} oninput="qSet('summary', this.value)" placeholder="Click “Write from the repair plan”, or write it here">${esc(q.summary || '')}</textarea>
+    ${locked ? '' : `<div class="bar"><button class="btn sm teal" id="q-rw" onclick="qRewrite()">Write from the repair plan</button><span class="note" id="q-rwmsg"></span></div>`}</div>`;
+  // Lines
+  h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><h2>Quote</h2>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Item</th><th style="width:150px;">Part #</th><th style="width:70px;">Qty</th><th style="width:110px;">Price each</th><th style="width:100px;">Total</th><th style="width:70px;"></th></tr></thead><tbody>
+    ${q.lines.map((l, i) => `<tr><td><input value="${esc(l.desc || '')}" ${dis} oninput="qLine(${i},'desc',this.value)" aria-label="Item" placeholder="${l.kind === 'labor' ? 'Labor' : 'Item'}"></td>
+      <td><input value="${esc(l.pn || '')}" ${dis} oninput="qLine(${i},'pn',this.value)" aria-label="Part number"></td>
+      <td><input type="number" min="1" value="${esc(l.qty || 1)}" ${dis} oninput="qLine(${i},'qty',this.value)" aria-label="Quantity"></td>
+      <td><input inputmode="decimal" value="${esc(l.price == null ? '' : l.price)}" ${dis} oninput="qLine(${i},'price',this.value)" aria-label="Price each" placeholder="0.00" class="${qNum(l.price) == null ? 'need' : ''}"></td>
+      <td class="num" id="ql-${i}">${usd(qLineTotal(l))}</td>
+      <td>${locked ? '' : `<button class="btn sm ghost" onclick="qRemove(${i})" aria-label="Remove line">Remove</button>`}</td></tr>`).join('') || `<tr><td colspan="6" class="note">No lines yet. Add the parts from the repair plan, labor and return shipping.</td></tr>`}
+    <tr><td colspan="4" style="text-align:right;"><b>Total</b></td><td class="num" style="font-size:18px;" id="q-total">${usd(qTotal(q))}</td><td></td></tr></tbody></table></div>
+    ${locked ? '' : `<div class="bar"><button class="btn sm" onclick="qAddPlanParts()" ${planParts.length ? '' : 'disabled title="No expected parts in section H"'}>Add parts from the repair plan</button>
+      <button class="btn sm" onclick="qAdd('labor')">Add labor</button><button class="btn sm" onclick="qAdd('other')">Add line</button>
+      <button class="btn sm" onclick="openLabel('quote')">Return shipping price…</button><span class="note" id="q-status">${q.ship ? 'Return shipping priced: ' + esc(q.ship.carrier + ' ' + q.ship.name) : ''}</span></div>
+      <span class="note">No sales tax. Labor is priced by hand until the labor pricing is decided.</span>`}</div>`;
+  // Send
+  if (!locked) {
+    const p = quoteProblem(r), off = !!p || !atQuote;
+    h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><div class="bar" style="justify-content:space-between;"><h2>Send to the customer</h2><button class="btn sm" onclick="downloadQuote()">Download PDF</button></div>
+      <label class="l">Message (goes in the Freshdesk reply, with the quote PDF attached)<textarea id="q-msg" rows="10" oninput="qMsg=this.value">${esc(qMsg != null ? qMsg : quoteMessage(r))}</textarea></label>
+      <div class="bar"><button class="btn primary" id="q-send" ${off ? 'disabled' : ''} onclick="qSend()">${r.quote_status === 'Sent' ? 'Send revised quote' : 'Send quote'} → #${esc(r.freshdesk_ticket || '?')}</button>
+      <button class="btn sm ghost" onclick="qMsg=null;renderRecord(true)">Reset message</button>
+      <span class="note" id="q-why">${!atQuote ? 'Opens when the repair is at Quote.' : p ? esc(p) : 'Testing: only works on a ticket listed as a test ticket on the server.'}</span></div></div>`;
+    // Decision
+    h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><h2>Customer’s answer</h2>
+      ${atQuote ? `<label class="l">Note (optional)<input id="q-note" placeholder="For example: approved by phone"></label>
+      <div class="bar"><button class="btn primary" onclick="qDecide('Approved')">Approved → Repair</button><button class="btn" onclick="qDecide('Declined')">Declined → return without repair</button></div>
+      <span class="note">Either one starts the 14-day clock again.</span>` : '<span class="note">Opens when the repair is at Quote.</span>'}</div>`;
+  }
+  h += `<div class="card"><h2 style="margin-bottom:10px;">Preview</h2><div class="repwrap" id="q-prev">${quoteHtml(r)}</div></div>`;
+  return h;
+}
+function qSchedule() {
+  clearTimeout(qSaveTimer); qSaveTimer = setTimeout(qSave, 700);
+  const r = curRec(), el = document.getElementById('q-msg');
+  if (r && el && qMsg == null) el.value = quoteMessage(r);
+  const why = document.getElementById('q-why'), b = document.getElementById('q-send');
+  if (r && why && b && r.step === 'Quote') { const p = quoteProblem(r); why.textContent = p || 'Testing: only works on a ticket listed as a test ticket on the server.'; b.disabled = !!p; }
+}
+async function qSave() {
+  qSaveTimer = null; const r = curRec(); if (!r) return;
+  const q = quoteOf(r);
+  const { error } = await sb.from('rr_records').update({ quote: q, quote_total: qTotal(q) }).eq('id', r.id);
+  if (error) return toast('Quote not saved: ' + error.message, true);
+  r.quote_total = qTotal(q);
+  const pv = document.getElementById('q-prev'); if (pv) pv.innerHTML = quoteHtml(r);
+}
+async function qFlush() { if (qSaveTimer) { clearTimeout(qSaveTimer); await qSave(); } }
+function qSet(k, v) { const r = curRec(); if (!r || quoteDecided(r)) return; quoteOf(r)[k] = v; qSchedule(); }
+function qLine(i, k, v) {
+  const r = curRec(); if (!r || quoteDecided(r)) return;
+  const l = quoteOf(r).lines[i]; if (!l) return;
+  l[k] = v;
+  const c = document.getElementById('ql-' + i); if (c) c.textContent = usd(qLineTotal(l));
+  const t = document.getElementById('q-total'); if (t) t.textContent = usd(qTotal(quoteOf(r)));
+  qSchedule();
+}
+async function qAdd(kind) { const r = curRec(); if (!r) return; quoteOf(r).lines.push({ kind, desc: kind === 'labor' ? 'Labor' : '', pn: '', qty: 1, price: '' }); await qSave(); renderRecord(true); }
+async function qRemove(i) { const r = curRec(); if (!r) return; quoteOf(r).lines.splice(i, 1); await qSave(); renderRecord(true); }
+async function qAddPlanParts() {
+  const r = curRec(); if (!r) return;
+  const q = quoteOf(r), H = (asOf(r).H || {}).v || {};
+  const key = x => (String(x.pn || '').trim() + '|' + String(x.desc || '').trim()).toLowerCase();
+  const have = new Set(q.lines.map(key));
+  const add = (Array.isArray(H.parts) ? H.parts : []).filter(p => String(p.desc || p.pn || '').trim() && !have.has(key(p)));
+  if (!add.length) return toast('Those parts are already on the quote.');
+  add.forEach(p => q.lines.push({ kind: 'part', desc: String(p.desc || '').trim(), pn: String(p.pn || '').trim(), qty: Number(p.qty) > 0 ? Number(p.qty) : 1, price: '' }));
+  await qSave(); renderRecord(true); toast(add.length + ' part' + (add.length > 1 ? 's' : '') + ' added. Fill in the prices.');
+}
+async function qRewrite() {
+  const r = curRec(); if (!r) return;
+  const notes = String(((asOf(r).H || {}).v || {}).notes || '').trim();
+  const msg = document.getElementById('q-rwmsg'), b = document.getElementById('q-rw');
+  if (!notes) { msg.textContent = 'Section H has no notes to work from.'; return; }
+  if (String(quoteOf(r).summary || '').trim() && !confirm('Replace “What we found” with new wording?')) return;
+  b.disabled = true; msg.textContent = 'Writing…';
+  try {
+    const { data: s } = await sb.auth.getSession();
+    const res = await fetch(SERVER + '/rewrite-for-customer', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (s && s.session ? s.session.access_token : '') },
+      body: JSON.stringify({ text: notes, section: 'Repair quote: what we found and what the repair involves' }) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || 'failed (' + res.status + ')');
+    quoteOf(r).summary = out.text; const ta = document.getElementById('q-sum'); if (ta) ta.value = out.text;
+    msg.textContent = 'Done. Check it and edit if needed.'; qSchedule();
+  } catch (e) { msg.textContent = 'Could not write it (' + e.message + '). Write it by hand.'; }
+  finally { b.disabled = false; }
+}
+// Return shipping price from the label window (quote mode): fills or replaces the shipping line
+async function lbUseForQuote() {
+  const p = lbProblem(); if (p) return toast(p, true);
+  const r = curRec(); if (!r) return;
+  const pick = lbl.pick, v = lbVals(), q = quoteOf(r);
+  const line = { kind: 'shipping', desc: 'Return shipping (' + pick.carrier + ' ' + pick.name + ')', pn: '', qty: 1, price: Number(pick.cost).toFixed(2) };
+  const i = q.lines.findIndex(l => l.kind === 'shipping');
+  if (i >= 0) q.lines[i] = line; else q.lines.push(line);
+  q.ship = { carrier: pick.carrier, carrier_id: pick.carrier_id, service_code: pick.service_code, name: pick.name, cost: pick.cost, from_id: v.from_id,
+    residential: lbl.res, weight: v.weight, length: v.length, width: v.width, height: v.height, at: new Date().toISOString() };
+  await qSave(); closeModal(); renderRecord(true); toast('Return shipping added: ' + usd(pick.cost));
+}
+function quoteFileName(r) {
+  const clean = x => String(x || '').replace(/[\\/:*?"<>|#%]/g, '').replace(/\s+/g, ' ').trim();
+  return clean(`Repair Quote - ${r.freshdesk_ticket ? '#' + r.freshdesk_ticket + ' - ' : ''}${r.customer_name || 'Customer'}`) + '.pdf';
+}
+function quoteHtml(r) {
+  const q = quoteOf(r), lines = qLinesUsed(q), when = r.quote_status === 'Sent' || quoteDecided(r) ? r.quote_sent_at : null;
+  const kv = (k, v) => `<div><b>${esc(k)}</b><span>${esc(v || '—')}</span></div>`;
+  const warr = r.warranty === 'Yes' ? 'Under warranty' : r.warranty === 'No' ? 'Not under warranty' : '—';
+  let h = `<div class="rep">
+    <div class="rhead"><img src="${FX_LOGO}" alt="FX Airguns" style="height:34px;"><div style="text-align:right;"><div class="rtitle">REPAIR QUOTE</div>
+      <div>${r.freshdesk_ticket ? 'Ticket #' + esc(r.freshdesk_ticket) + ' · ' : ''}${fmtDate(when || new Date().toISOString())}</div></div></div>
+    <h3>Customer &amp; rifle</h3>
+    <div class="kv">${kv('Customer', r.customer_name)}${kv('Model', r.model ? (/^fx/i.test(r.model) ? r.model : 'FX ' + r.model) : '')}${kv('Serial #', r.serial_number)}${kv('Caliber', r.caliber)}${kv('Received', fmtDate(r.received_at))}${kv('Warranty', warr)}</div>`;
+  if (r.issue) h += `<h3>What you told us</h3><div class="say">${esc(r.issue)}</div>`;
+  h += `<h3>What we found</h3><div class="say">${esc(String(q.summary || '').trim() || '—')}</div>`;
+  h += `<div class="rep-avoid"><h3>Quote</h3><table><tr><th>Item</th><th style="width:130px;">Part #</th><th style="width:50px;">Qty</th><th style="width:90px;">Price</th><th style="width:90px;">Total</th></tr>
+    ${lines.map(l => `<tr><td>${esc(l.desc || '')}</td><td>${esc(l.pn || '')}</td><td>${esc(qQty(l))}</td><td>${qNum(l.price) == null ? '—' : usd(qNum(l.price))}</td><td>${usd(qLineTotal(l))}</td></tr>`).join('') || '<tr><td colspan="5">—</td></tr>'}
+    <tr><td colspan="4" style="text-align:right;"><b>Total</b></td><td><b>${usd(qTotal(q))}</b></td></tr></table></div>
+    <h3>Your choice</h3><div class="say">Reply to this email to let us know. If you approve, we’ll go ahead with the repair and ship the rifle back when it’s done. If you decline, we’ll return the rifle without repair.</div>
+    <div class="foot">FX Airguns · Questions about this quote? Reply to your support ticket${r.freshdesk_ticket ? ' #' + esc(r.freshdesk_ticket) : ''} and our team will help.</div></div>`;
+  return h;
+}
+async function downloadQuote() {
+  const r = curRec(); if (!r) return;
+  await qFlush(); toast('Making the PDF…');
+  try { await makePdf(r, 'save', 'quote'); } catch (e) { toast('Could not make the PDF: ' + e.message, true); }
+}
+async function qSend() {
+  const r = curRec(); if (!r) return;
+  await qFlush();
+  const p = quoteProblem(r); if (p) return toast(p, true);
+  if (r.step !== 'Quote') return toast('The repair isn’t at Quote.', true);
+  const msg = String(qMsg != null ? qMsg : quoteMessage(r)).trim(); if (!msg) return toast('Write a message first.', true);
+  const revised = r.quote_status === 'Sent';
+  if (!confirm(`Send the ${revised ? 'revised ' : ''}quote (${usd(qTotal(quoteOf(r)))}) to Freshdesk ticket #${r.freshdesk_ticket}?\n\nThe customer on that ticket gets this reply with the PDF attached.`)) return;
+  const btn = document.getElementById('q-send'), note = document.getElementById('q-why');
+  btn.disabled = true; note.textContent = 'Making the PDF…';
+  try {
+    const uri = await makePdf(r, 'data', 'quote');
+    note.textContent = 'Sending to Freshdesk…';
+    const out = await api('/repair-record/send-quote', { record_id: r.id, message: msg, filename: quoteFileName(r), pdf_base64: String(uri).split(',')[1] });
+    const { data } = await sb.from('rr_records').select('*').eq('id', r.id).single(); if (data) { Object.assign(r, data); normStep(r); }
+    qMsg = null; await loadEvents(r.id); renderRecord(true); toast((out.version > 1 ? 'Revised quote' : 'Quote') + ' sent to Freshdesk #' + out.ticket);
+  } catch (e) { note.textContent = 'Not sent: ' + e.message; btn.disabled = false; toast('Not sent: ' + e.message, true); }
+}
+async function qDecide(kind) {
+  const r = curRec(); if (!r || r.step !== 'Quote') return;
+  await qFlush();
+  const approved = kind === 'Approved', target = approved ? 'Repair' : 'Ready to ship';
+  const total = qTotal(quoteOf(r));
+  let ask = approved ? 'Mark the quote approved? The repair moves to Repair & testing and the 14-day clock starts again.'
+    : 'Mark the quote declined? The rifle goes to Ready to ship to be returned without repair, and the 14-day clock starts again.';
+  if (r.quote_status !== 'Sent') ask = 'The quote hasn’t been sent from here.\n\n' + ask;
+  if (!confirm(ask)) return;
+  const note = String((document.getElementById('q-note') || {}).value || '').trim();
+  const now = new Date().toISOString(), st = Object.assign({}, r.step_times || {}); st[target] = now;
+  const patch = Object.assign({ quote_status: kind, quote_decided_at: now, quote_decided_by: me, quote_decision_note: note || null, quote_total: total, step: target, step_times: st }, pausePatch(r, target));
+  const paused = (Number(patch.clock_paused_ms != null ? patch.clock_paused_ms : r.clock_paused_ms) || 0) - (Number(r.clock_paused_ms) || 0);
+  if (await patchRecord(patch)) {
+    await logEvent(r.id, 'step', 'Quote ' + kind.toLowerCase() + ' by the customer (' + usd(total) + ')' + (note ? '. Note: ' + note : '') + '. Moved to ' + target +
+      ' · 14-day clock running again (paused ' + daysTxt(paused / DAY) + ')');
+    recTab = approved ? RT_TAB : 'Report'; sendMsg = null;
+    await loadEvents(r.id); renderRecord(true); window.scrollTo(0, 0);
+    toast(approved ? 'Approved. Now at Repair & testing.' : 'Declined. Now at Ready to ship.');
+  }
+}
+// Teams card in Workflow Tasks when a repair reaches Quote (doesn't block anything if it fails)
+async function notifyQuoteNeeded(r) {
+  try { await api('/repair-record/quote-needed', { record_id: r.id, app_url: location.origin + location.pathname + '#r=' + r.id }); }
+  catch (e) { toast('Teams “Quote needed” message not sent: ' + e.message, true); }
+}
+function approvedQuoteBox(r) {
+  if (r.quote_status !== 'Approved') return '';
+  const lines = qLinesUsed(quoteOf(r));
+  return `<div class="sentbox" style="display:flex;flex-direction:column;gap:4px;"><b>Approved quote · ${usd(r.quote_total)}</b>
+    <span>${lines.map(l => esc((qQty(l) !== 1 ? qQty(l) + ' x ' : '') + [l.desc, l.pn].filter(Boolean).join(' · '))).join('; ')}</span>
+    <span class="note">Approved ${fmtDate(r.quote_decided_at)}${r.quote_decision_note ? ' · ' + esc(r.quote_decision_note) : ''}.</span></div>`;
 }
 
 // ── LISTS PAGE (models, calibers, barrel lengths) ───────
