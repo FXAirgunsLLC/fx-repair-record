@@ -1910,7 +1910,7 @@ async function openLabel(mode) {
   document.getElementById('modal-body').innerHTML = (forQuote ? `<h2>Return shipping price</h2>
     <p class="note">For the quote: pick a service and its price goes on the quote as the return shipping line. Nothing is bought. The box and service are remembered for the label later.</p>` : `<h2>Create shipping label</h2>
     <p class="note">4×6 label, no signature, no insurance. FX’s phone goes on the label. The Freshdesk # prints as the reference.
-      Every label is real: FedEx bills FX’s account once it’s scanned; UPS and USPS come out of the ShipStation balance.</p>`) + `
+      Every label is real and billed to FX’s FedEx account once it’s scanned.</p>`) + `
     <label class="l">Ship from<select id="lb-from" onchange="lbChanged()">${shipFrom.map(f => `<option value="${esc(f.id)}" ${f.id === from ? 'selected' : ''}>${esc(f.name)} · ${esc(f.company)}, ${esc(f.city)} ${esc(f.state)}</option>`).join('')}</select></label>
     <div class="l" style="margin-top:6px;">Ship to: <b>${esc(r.customer_name || 'Customer')}</b>${r.address ? ` <span class="note">(page 1: ${esc(r.address)})</span>` : ''}</div>
     <div class="grid2">${inp('s1', 'Street', a.street1)}${inp('s2', 'Apt / suite (optional)', a.street2)}</div>
@@ -1918,7 +1918,7 @@ async function openLabel(mode) {
     <div class="bar"><button class="btn sm" id="lb-chk" onclick="lbCheck()">Check address</button><span class="note" id="lb-amsg" role="status"></span></div>
     <div class="l">Address type<div class="bar" id="lb-res">${lbResButtons()}</div></div>
     <div class="grid4">${inp('wt', 'Weight (lb)', qs.weight, 'inputmode="decimal"')}${inp('L', 'Length (in)', qs.length, 'inputmode="numeric"')}${inp('W', 'Width (in)', qs.width, 'inputmode="numeric"')}${inp('H', 'Height (in)', qs.height, 'inputmode="numeric"')}</div>
-    <div class="bar"><button class="btn sm" id="lb-rt" onclick="lbRates()">See prices</button><span class="note">FedEx, UPS and USPS, cheapest first. Internal only, never on the Service Report.</span></div>
+    <div class="bar"><button class="btn sm" id="lb-rt" onclick="lbRates()">See prices</button><span class="note">FedEx Ground (Home Delivery for homes), 2Day and Standard Overnight. Internal only, never on the Service Report.</span></div>
     <div id="lb-rates"></div>
     <p class="note" id="lb-why" role="status"></p>
     <div class="bar"><button class="btn primary" id="lb-go" onclick="${forQuote ? 'lbUseForQuote()' : 'lbCreate()'}">${forQuote ? 'Add to quote' : 'Create label'}</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
