@@ -2339,7 +2339,7 @@ function quoteHtml(r) {
   h += `<div class="rep-avoid"><h3>Quote</h3><table><tr><th>Item</th><th style="width:130px;">Part #</th><th style="width:50px;">Qty</th><th style="width:90px;">Price</th><th style="width:90px;">Total</th></tr>
     ${lines.map(l => `<tr><td>${esc(l.desc || '')}</td><td>${esc(l.pn || '')}</td><td>${esc(qQty(l))}</td><td>${qNum(l.price) == null ? '—' : usd(qNum(l.price))}</td><td>${usd(qLineTotal(l))}</td></tr>`).join('') || '<tr><td colspan="5">—</td></tr>'}
     <tr><td colspan="4" style="text-align:right;"><b>Total</b></td><td><b>${usd(qTotal(q))}</b></td></tr></table></div>
-    <h3>Your choice</h3><div class="say">Reply to this email to let us know. If you approve, we’ll go ahead with the repair and ship the rifle back when it’s done. If you decline, we’ll return the rifle without repair.</div>
+    <h3>Your choice</h3><div class="say">Reply to this email to let us know. If you approve, we’ll go ahead with the repair and ship the rifle back when it’s done. If you’d rather not go ahead, or have any questions or concerns, just reply to this email and we’ll work with you.</div>
     <div class="foot">FX Airguns · Questions about this quote? Reply to your support ticket${r.freshdesk_ticket ? ' #' + esc(r.freshdesk_ticket) : ''} and our team will help.</div></div>`;
   return h;
 }
