@@ -337,7 +337,8 @@ function recordFor(t) { return records.find(r => String(r.repair_ticket_id) === 
 // ── DATA ────────────────────────────────────────────────
 async function loadAll() {
   const [a, b] = await Promise.all([
-    sb.from('repair_tickets').select('id,customer_name,ticket_number,model,serial_number,customer_email,customer_phone,customer_address,warranty,arrived_date,status,location,archived').eq('archived', false).order('id', { ascending: false }),
+    // Only repairs started here ("new" process). Older rifles finish in the Repair Queue.
+    sb.from('repair_tickets').select('id,customer_name,ticket_number,model,serial_number,customer_email,customer_phone,customer_address,warranty,arrived_date,status,location,archived,process,incoming_tracking,bin_location,tune').eq('archived', false).eq('process', 'new').order('id', { ascending: false }),
     sb.from('rr_records').select('*').order('created_at', { ascending: false })
   ]);
   if (a.error) throw a.error;
@@ -401,10 +402,10 @@ function renderList() {
   view = 'list';
   const v = document.getElementById('view');
   v.innerHTML = `<div class="bar" style="justify-content:space-between;align-items:flex-end;">
-      <div><h1>Repairs</h1><p class="lede">Test version. It reads the Repair Queue but never changes it.</p></div>
-      <div class="bar"><button class="btn" onclick="openLists()">Lists</button>${STANDARDS_ON ? '<button class="btn" onclick="openStandards()">Test standards</button>' : ''}<button class="btn primary" onclick="openNewTest()">New test repair</button></div></div>
+      <div><h1>Repairs</h1><p class="lede">New rifles start here with “New repair”. Rifles already in the Repair Queue finish there.</p></div>
+      <div class="bar"><button class="btn" onclick="openLists()">Lists</button>${STANDARDS_ON ? '<button class="btn" onclick="openStandards()">Test standards</button>' : ''}<button class="btn" onclick="openNewTest()">New test repair</button><button class="btn primary" onclick="openNewRepair()">New repair</button><button style="display:none" onclick="openNewTest()">New test repair</button></div></div>
     <div class="tabs">
-      <button class="tab ${listTab === 'queue' ? 'on' : ''}" onclick="listTab='queue';renderList()">Repair Queue repairs</button>
+      <button class="tab ${listTab === 'queue' ? 'on' : ''}" onclick="listTab='queue';renderList()">Repairs</button>
       <button class="tab ${listTab === 'test' ? 'on' : ''}" onclick="listTab='test';renderList()">Test repairs</button>
       <button class="tab ${listTab === 'dash' ? 'on' : ''}" onclick="listTab='dash';renderList()">Dashboard</button>
       <button class="tab ${listTab === 'surveys' ? 'on' : ''}" onclick="listTab='surveys';renderList()">Surveys${surveys.filter(x => x.responded_at).length ? ' (' + surveys.filter(x => x.responded_at).length + ')' : ''}</button>
@@ -569,10 +570,12 @@ function renderRows() {
   const hit = (...xs) => !s || xs.join(' ').toLowerCase().includes(s);
   if (listTab === 'queue') {
     const list = tickets.filter(t => hit(t.ticket_number, t.customer_name, t.model, t.serial_number));
-    if (!list.length) { el.innerHTML = '<div class="empty">No Repair Queue repairs match.</div>'; return; }
-    el.innerHTML = `<table><thead><tr><th>Ticket #</th><th>Customer</th><th>Model</th><th>Repair Queue</th><th>Repair Record</th></tr></thead><tbody>` +
-      list.map(t => `<tr class="row" onclick="openFromTicket(${Number(t.id)})"><td class="num" style="font-size:19px;color:var(--teal);">#${esc(t.ticket_number || '—')}</td>
-        <td>${esc(t.customer_name)}</td><td>${esc(t.model)}</td><td class="muted">${esc(t.status || '')}${t.location === 'nc' ? ' · Newman' : ''}</td><td>${stepCell(recordFor(t))}</td></tr>`).join('') + '</tbody></table>';
+    if (!list.length) { el.innerHTML = `<div class="empty">${tickets.length ? 'No repairs match.' : 'No repairs yet. Use “New repair” to start one. Rifles already in the Repair Queue finish there.'}</div>`; return; }
+    el.innerHTML = `<table><thead><tr><th>Ticket #</th><th>Customer</th><th>Model</th><th>Location</th><th>Status</th></tr></thead><tbody>` +
+      list.map(t => { const r = recordFor(t);
+        return `<tr class="row" onclick="openFromTicket(${Number(t.id)})"><td class="num" style="font-size:19px;color:var(--teal);">#${esc(t.ticket_number || '—')}</td>
+        <td>${esc(t.customer_name)}</td><td>${esc((r && r.model) || t.model)}</td><td class="muted">${t.location === 'nc' ? 'NC' : 'CA'}${t.bin_location ? ' · Rack ' + esc(t.bin_location) : ''}</td>
+        <td>${r ? stepCell(r) : '<span class="pill">Not started</span>'}${!r || !r.received_at ? (t.incoming_tracking ? ' <span class="pill">On its way</span>' : '') : ''}</td></tr>`; }).join('') + '</tbody></table>';
   } else {
     const list = records.filter(r => r.is_test && hit(r.freshdesk_ticket, r.customer_name, r.model, r.serial_number));
     if (!list.length) { el.innerHTML = '<div class="empty">No test repairs yet. Use “New test repair” to make one.</div>'; return; }
@@ -608,6 +611,126 @@ async function openFromTicket(ticketId) {
   }
   openRecord(r.id);
 }
+
+// ── NEW REPAIR (intake) ─────────────────────────────────
+// Makes the repair in one step: a hidden Repair Queue card marked "new" (so the Inbound Tracker and
+// the arrival date keep working), the Inbound card from the incoming tracking #, and this record.
+let nrFdLast = '', nrWarr = '', nrLoc = 'ca', nrTune = false, pendingNew = null;
+function openNewRepair() {
+  nrFdLast = ''; nrWarr = ''; nrLoc = 'ca'; nrTune = false; pendingNew = null;
+  const f = (id, label, ph, extra) => `<label class="l">${label}<input id="nr-${id}" placeholder="${ph || ''}" ${extra || ''}></label>`;
+  document.getElementById('modal-body').innerHTML = `<h2>New repair</h2>
+    <div class="grid2">${f('ticket', 'Freshdesk ticket #', 'e.g. 34512', 'inputmode="numeric" onblur="nrFillFromFreshdesk()" onkeydown="if(event.key===\'Enter\')nrFillFromFreshdesk()"')}${f('cust', 'Customer', 'First Last or Dealer')}</div>
+    <p class="note" id="nr-fd">Type the ticket # and the customer and rifle details fill in from the Freshdesk ticket.</p>
+    <div class="grid2">${f('phone', 'Phone', '(555) 123-4567')}${f('email', 'Email', 'customer@email.com')}</div>
+    ${f('address', 'Address', 'Street, City, State ZIP')}
+    <div class="grid2">${f('serial', 'Serial #', 'e.g. 2249971')}${f('model', 'Model', 'Fills in from the serial if left blank')}</div>
+    <div class="grid2">
+      <div class="l">Warranty<div class="bar" id="nr-warr">${nrWarrButtons()}</div></div>
+      <div class="l">Location<div class="bar" id="nr-loc">${nrLocButtons()}</div></div>
+    </div>
+    <div class="grid2">
+      <div class="l">Tuning<div class="bar"><button type="button" class="opt" id="nr-tune" onclick="nrTune=!nrTune;this.classList.toggle('on',nrTune)">Tune</button></div></div>
+      ${f('rack', 'Rack # (warehouse location)', 'e.g. A-12-3')}
+    </div>
+    <div class="grid2">${f('intr', 'Incoming tracking #', 'FedEx / UPS…')}${f('insc', 'Incoming shipping cost', '$0.00', 'inputmode="decimal"')}</div>
+    ${f('rec', 'Already received? Date it arrived', '', 'type="date"')}
+    <p class="note">Leave it empty while the rifle is on its way: the Inbound Tracker fills it when it arrives, and the 14-day clock starts then.</p>
+    <div class="bar" style="margin-top:8px;"><button class="btn primary" id="nr-save" onclick="saveNewRepair()">Create repair</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
+  document.getElementById('modal').classList.add('open');
+  setTimeout(() => document.getElementById('nr-ticket').focus(), 30);
+}
+function nrWarrButtons() { return [['warr', 'Warranty'], ['oop', 'Out of warranty']].map(([k, l]) => `<button type="button" class="opt ${nrWarr === k ? 'on' : ''}" onclick="nrWarr=(nrWarr==='${k}'?'':'${k}');document.getElementById('nr-warr').innerHTML=nrWarrButtons()">${l}</button>`).join(' '); }
+function nrLocButtons() { return [['ca', 'California'], ['nc', 'North Carolina']].map(([k, l]) => `<button type="button" class="opt ${nrLoc === k ? 'on' : ''}" onclick="nrLoc='${k}';document.getElementById('nr-loc').innerHTML=nrLocButtons()">${l}</button>`).join(' '); }
+async function nrFillFromFreshdesk() {
+  const id = (document.getElementById('nr-ticket').value || '').replace(/[^0-9]/g, ''), hint = document.getElementById('nr-fd');
+  if (!id || id === nrFdLast) return;
+  nrFdLast = id;
+  hint.textContent = 'Reading ticket #' + id + ' in Freshdesk… (a few seconds; the first lookup of the day can take up to a minute)';
+  try {
+    const { data: s } = await sb.auth.getSession();
+    const res = await fetch(SERVER + '/freshdesk-intake', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (s && s.session ? s.session.access_token : '') },
+      body: JSON.stringify({ id, reasons: [] }) });
+    const t = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(t.error || ('lookup failed (' + res.status + ')'));
+    if ((document.getElementById('nr-ticket').value || '').replace(/[^0-9]/g, '') !== id) return;
+    if (!t.found) { hint.textContent = 'Ticket #' + id + ' wasn’t found in Freshdesk. Fill in the details by hand.'; return; }
+    let n = 0;
+    const sug = (fid, v) => { const el = document.getElementById('nr-' + fid); if (!el || !v || el.value.trim()) return; el.value = v; el.classList.add('need'); n++; el.addEventListener('input', () => el.classList.remove('need'), { once: true }); };
+    sug('cust', t.requesterName || t.company); sug('email', t.email); sug('phone', t.phone); sug('address', t.address);
+    const items = Array.isArray(t.items) ? t.items : [];
+    const rifle = items.filter(x => x.kind === 'Rifle' && (x.model || x.serial_number))[0] || items[0];
+    if (rifle) { sug('model', rifle.model); sug('serial', rifle.serial_number); }
+    hint.textContent = n ? 'Filled from Freshdesk. Highlighted fields are suggestions: check them before saving.' + (items.length > 1 ? ' The ticket mentions ' + items.length + ' items; this repair is for the first rifle.' : '') : 'Found the ticket, but there was nothing new to fill in.';
+  } catch (e) { nrFdLast = ''; hint.textContent = 'Couldn’t reach Freshdesk (' + e.message + '). Fill in the details by hand.'; }
+}
+async function saveNewRepair(confirmed) {
+  const v = id => (document.getElementById('nr-' + id) || {}).value ? document.getElementById('nr-' + id).value.trim() : '';
+  let row = pendingNew;
+  if (!(confirmed === true && row)) {
+    const ticket = v('ticket').replace(/[^0-9]/g, ''), cust = v('cust');
+    if (!ticket) return toast('Enter the Freshdesk ticket #.', true);
+    if (!cust) return toast('Enter the customer’s name.', true);
+    row = { customer_name: cust, ticket_number: ticket, model: v('model'), serial_number: v('serial') || null,
+      customer_phone: v('phone') || null, customer_email: v('email') || null, customer_address: v('address') || null,
+      incoming_tracking: v('intr').replace(/\s+/g, '') || null, incoming_shipping_cost: v('insc') || null,
+      arrived_date: v('rec') || null, status: v('rec') ? 'In Shop' : 'Incoming', location: nrLoc, warranty: nrWarr, tune: nrTune,
+      bin_location: v('rack') || null, notes: [], attachments: [], archived: false, process: 'new' };
+    const same = await sameTicketRepairs(ticket);
+    if (same.length) {
+      pendingNew = row;
+      document.getElementById('modal-body').innerHTML = `<h2>Ticket #${esc(ticket)} already has a repair</h2>
+        <p class="note">Open it to keep everything on one card. Only start another if this is a different rifle on the same ticket.</p>
+        <div style="display:flex;flex-direction:column;gap:8px;">${same.map(x => `<div class="bar" style="justify-content:space-between;"><span>${dupLine(x)}</span><button class="btn sm primary" onclick="closeModal();openRecord('${x.id}')">Open this one</button></div>`).join('')}</div>
+        <div class="bar" style="margin-top:12px;"><button class="btn" onclick="saveNewRepair(true)">Start another (different rifle)</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
+      return;
+    }
+  }
+  pendingNew = null;
+  const btn = document.getElementById('nr-save'); if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+  try {
+    // 1. The (hidden) Repair Queue card
+    const top = await sb.from('repair_tickets').select('sort_order').order('sort_order', { ascending: false }).limit(1);
+    row.sort_order = ((top.data && top.data[0] && top.data[0].sort_order) || 0) + 1;
+    let res = await sb.from('repair_tickets').insert(row).select().single();
+    if (res.error && /id/i.test(res.error.message || '')) {     // table without an automatic id: use the next number
+      const mx = await sb.from('repair_tickets').select('id').order('id', { ascending: false }).limit(1);
+      row.id = ((mx.data && mx.data[0] && Number(mx.data[0].id)) || 0) + 1;
+      res = await sb.from('repair_tickets').insert(row).select().single();
+    }
+    if (res.error) throw res.error;
+    const t = res.data;
+    // 2. The Inbound card for the incoming tracking # (same as the Repair Queue does)
+    if (t.incoming_tracking) await nrLinkInbound(t);
+    // 3. This record (page 1 fills from the card, Freshdesk and the serial lookup)
+    tickets.unshift(t); closeModal();
+    await openFromTicket(t.id);
+    toast('Repair created' + (t.incoming_tracking ? ' and added to the Inbound Tracker' : ''));
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Create repair'; }
+    toast('Could not create the repair: ' + (e.message || e), true);
+  }
+}
+async function nrLinkInbound(t) {
+  try {
+    const { data: existing } = await sb.from('shipments').select('id').eq('tracking', t.incoming_tracking).limit(1);
+    let linkedId;
+    if (existing && existing.length) {
+      linkedId = existing[0].id;
+      await sb.from('shipments').update({ linked_repair_id: t.id }).eq('id', linkedId);
+    } else {
+      const today = new Date().toISOString().split('T')[0];
+      const { data: created, error } = await sb.from('shipments').insert({ tracking: t.incoming_tracking, carrier: 'Other',
+        description: 'Repair ticket #' + t.ticket_number + ' — ' + t.customer_name + (t.model ? ' (' + t.model + ')' : ''),
+        item_type: 'Customer return', delivery_date: t.arrived_date || today, original_date: t.arrived_date || today,
+        status: 'In Transit', notes: [], received: false, linked_repair_id: t.id }).select('id').single();
+      if (error) throw error;
+      linkedId = created.id;
+    }
+    if (linkedId) await sb.from('repair_tickets').update({ linked_inbound_id: linkedId }).eq('id', t.id);
+  } catch (e) { toast('Repair created, but the Inbound card wasn’t: ' + e.message + '. Add it in the Inbound Tracker.', true); }
+}
+
 function openNewTest() {
   document.getElementById('modal-body').innerHTML = `<h2>New test repair</h2>
     <p class="note">Only exists in this test app. Use a real Freshdesk ticket # to see page 1 fill itself.</p>
