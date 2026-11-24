@@ -409,12 +409,13 @@ async function syncReceivedDates() {
 async function loadParts() {
   const all = [];
   for (let from = 0; from < 20000; from += 1000) {
-    const { data, error } = await sb.from('rr_parts').select('part_number,name').order('part_number').range(from, from + 999);
+    let { data, error } = await sb.from('rr_parts').select('part_number,name,map_price').order('part_number').range(from, from + 999);
+    if (error && /map_price/.test(error.message || '')) ({ data, error } = await sb.from('rr_parts').select('part_number,name').order('part_number').range(from, from + 999));
     if (error || !data) break;
     all.push(...data);
     if (data.length < 1000) break;
   }
-  parts = all.map(p => ({ pn: p.part_number, name: p.name, key: normKey(p.part_number + ' ' + p.name) }));
+  parts = all.map(p => ({ pn: p.part_number, name: p.name, map: p.map_price != null ? Number(p.map_price) : null, key: normKey(p.part_number + ' ' + p.name) }));
   partsByPn = {}; parts.forEach(p => { partsByPn[p.pn.toLowerCase()] = p; });
   partsLoaded = true;
 }
@@ -1357,7 +1358,9 @@ function secInner(r, s) {
     h += `<label class="l" style="margin-top:8px;">Notes<textarea rows="6" placeholder="What needs doing, what still needs checking, anything else found" oninput="setVal('H','notes',this.value)">${esc(d.v.notes || '')}</textarea></label>
       <div class="l">Expected parts</div>
       <div id="h-parts">${parts.map((p, i) => partRow(p, i)).join('')}</div>
-      <div><button class="btn sm" onclick="addPart()">Add part</button></div>`;
+      <div class="bar" style="justify-content:space-between;"><button class="btn sm" onclick="addPart()">Add part</button>
+        ${(() => { const real = parts.filter(p => String(p.desc || p.pn || '').trim()); if (!real.length) return ''; const m = planMapTotal(real);
+          return `<span class="note">Expected parts at MAP: <b>${money(m.t)}</b>${m.missing ? ` · ${m.missing} without a MAP price` : ''}</span>`; })()}</div>`;
   } else {
     h += `<div class="find">
       <label class="l">Your notes<textarea id="raw-${s.id}" placeholder="Quick notes are fine" oninput="setNotes('${s.id}','raw',this.value)">${esc(d.raw || '')}</textarea></label>
@@ -1371,9 +1374,13 @@ function secInner(r, s) {
   }
   return h + '</div>';
 }
+function mapOf(p) { const k = String((p && p.pn) || '').trim().toLowerCase(); const x = k && partsByPn[k]; return x && x.map != null ? x.map : null; }
+function money(n) { return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function planMapTotal(list) { let t = 0, missing = 0; list.forEach(p => { const m = mapOf(p); if (m == null) missing++; else t += m * (Number(p.qty) > 0 ? Number(p.qty) : 1); }); return { t, missing }; }
 function partRow(p, i) {
   return `<div class="prow"><input type="number" min="1" value="${esc(p.qty || 1)}" oninput="setPart(${i},'qty',this.value)" aria-label="Quantity" style="max-width:80px;">
     ${partInputs('H', p, i)}
+    <span class="note map-price" style="min-width:110px;text-align:right;">${mapOf(p) != null ? 'MAP ' + money(mapOf(p)) + (Number(p.qty) > 1 ? ' × ' + Number(p.qty) : '') : (String(p.pn || '').trim() ? 'No MAP price' : '')}</span>
     <button class="btn sm ghost" onclick="removePart(${i})" aria-label="Remove part">Remove</button></div>`;
 }
 function curRec() { return records.find(x => x.id === openRecordId); }
@@ -2564,8 +2571,9 @@ async function qAddPlanParts() {
   const have = new Set(q.lines.map(key));
   const add = (Array.isArray(H.parts) ? H.parts : []).filter(p => String(p.desc || p.pn || '').trim() && !have.has(key(p)));
   if (!add.length) return toast('Those parts are already on the quote.');
-  add.forEach(p => q.lines.push({ kind: 'part', desc: String(p.desc || '').trim(), pn: String(p.pn || '').trim(), qty: Number(p.qty) > 0 ? Number(p.qty) : 1, price: '' }));
-  await qSave(); renderRecord(true); toast(add.length + ' part' + (add.length > 1 ? 's' : '') + ' added. Fill in the prices.');
+  add.forEach(p => { const m = mapOf(p); q.lines.push({ kind: 'part', desc: String(p.desc || '').trim(), pn: String(p.pn || '').trim(), qty: Number(p.qty) > 0 ? Number(p.qty) : 1, price: m != null ? String(m) : '' }); });
+  const noPrice = add.filter(p => mapOf(p) == null).length;
+  await qSave(); renderRecord(true); toast(add.length + ' part' + (add.length > 1 ? 's' : '') + ' added at MAP price.' + (noPrice ? ' ' + noPrice + ' had no MAP price: fill those in.' : ''));
 }
 async function qRewrite() {
   const r = curRec(); if (!r) return;
@@ -2693,7 +2701,10 @@ function renderLists() {
     }).join('')}</div>
     <div class="card" style="margin-top:18px;display:flex;flex-direction:column;gap:8px;"><h2>Parts <span class="note">(${parts.length.toLocaleString()} parts)</span></h2>
       <span class="note">Used for the part lookup on Parts used. To update it, choose the new Excel export: the first column is the part number, the second the part name (a header row is fine). New parts are added and changed names updated; nothing is deleted.</span>
-      <div class="bar"><label class="btn">Update parts from Excel<input type="file" accept=".xlsx,.xls,.csv" hidden onchange="importParts(this.files[0]);this.value=''"></label><span class="note" id="parts-msg"></span></div></div>`;
+      <div class="bar"><label class="btn">Update parts from Excel<input type="file" accept=".xlsx,.xls,.csv" hidden onchange="importParts(this.files[0]);this.value=''"></label><span class="note" id="parts-msg"></span></div></div>
+    <div class="card" style="margin-top:18px;display:flex;flex-direction:column;gap:8px;"><h2>MAP prices <span class="note">(${parts.filter(p => p.map != null).length.toLocaleString()} parts priced)</span></h2>
+      <span class="note">From the MAP Pricelist in Monitor (FX Airguns LLC). Choose the Excel export: it needs a part number column and a price column (a description column is optional). Prices are updated, and parts not on the parts list yet are added. Shown next to expected parts and used when parts are added to a quote.</span>
+      <div class="bar"><label class="btn">Update MAP prices from Excel<input type="file" accept=".xlsx,.xls,.csv" hidden onchange="importMap(this.files[0]);this.value=''"></label><span class="note" id="map-msg"></span></div></div>`;
 }
 function tidyOpt(kind, v) {
   v = String(v || '').trim(); if (!v) return '';
@@ -2751,6 +2762,46 @@ async function importParts(file) {
     }
     await loadParts(); renderLists();
     toast(`Parts list updated: ${added} added, ${changed.length - added} renamed`);
+  } catch (e) { msg.textContent = 'Could not update: ' + (e.message || e); }
+}
+async function importMap(file) {
+  const msg = document.getElementById('map-msg');
+  if (!file) return;
+  if (!window.XLSX) { msg.textContent = 'The Excel reader did not load. Refresh and try again.'; return; }
+  msg.textContent = 'Reading ' + file.name + '…';
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+    // Find the header row and its columns (Monitor export: Part.PartNumber, Part.Description, Price)
+    let hi = rows.findIndex(r => r.some(c => /part.?number|part\s*#|^part$/i.test(String(c).trim())) && r.some(c => /price/i.test(String(c))));
+    let cPn = 0, cName = 1, cPrice = 2;
+    if (hi >= 0) {
+      const h = rows[hi].map(c => String(c).trim().toLowerCase());
+      cPn = h.findIndex(c => /part.?number|part\s*#|^part$/.test(c));
+      cName = h.findIndex(c => /desc|name/.test(c));
+      cPrice = h.findIndex(c => /price/.test(c) && !/currency|code/.test(c));
+    }
+    const seen = new Set(), list = [];
+    rows.slice(hi + 1).forEach(r => {
+      const pn = String(r[cPn] || '').trim(), price = Number(String(r[cPrice]).replace(/[$,\s]/g, ''));
+      if (!pn || !isFinite(price) || String(r[cPrice]).trim() === '' || seen.has(pn.toLowerCase())) return;
+      seen.add(pn.toLowerCase()); list.push({ part_number: pn, name: cName >= 0 ? String(r[cName] || '').trim() : '', map_price: Math.round(price * 100) / 100 });
+    });
+    if (!list.length) { msg.textContent = 'No prices found. The file needs a part number column and a price column.'; return; }
+    const now = new Date().toISOString();
+    const changed = list.filter(x => { const old = partsByPn[x.part_number.toLowerCase()]; return !old || old.map !== x.map_price; });
+    if (!changed.length) { msg.textContent = `All ${list.length.toLocaleString()} MAP prices already match. Nothing to update.`; return; }
+    const added = changed.filter(x => !partsByPn[x.part_number.toLowerCase()]).length;
+    if (!confirm(`${list.length.toLocaleString()} MAP prices in the file: ${changed.length - added} to update, ${added} parts not on the parts list yet (they'll be added). Go ahead?`)) { msg.textContent = ''; return; }
+    for (let k = 0; k < changed.length; k += 500) {
+      msg.textContent = `Saving… ${Math.min(k + 500, changed.length)} of ${changed.length}`;
+      const batch = changed.slice(k, k + 500).map(x => { const old = partsByPn[x.part_number.toLowerCase()];
+        return { part_number: x.part_number, name: (old && old.name) || x.name || x.part_number, map_price: x.map_price, map_price_updated_at: now, updated_at: now }; });
+      const { error } = await sb.from('rr_parts').upsert(batch, { onConflict: 'part_number' });
+      if (error) throw new Error(error.message + (/map_price/.test(error.message) ? ' (run 39-parts-map-price.sql first)' : ''));
+    }
+    await loadParts(); renderLists();
+    toast(`MAP prices updated: ${changed.length - added} updated, ${added} parts added`);
   } catch (e) { msg.textContent = 'Could not update: ' + (e.message || e); }
 }
 async function deleteOpt(id) {
