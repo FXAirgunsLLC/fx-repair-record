@@ -2228,7 +2228,7 @@ async function lbCreate() {
     if (out.label_path) await openLabelFile(out.label_path, win);
     else if (out.label_base64 && win) win.location = 'data:application/pdf;base64,' + out.label_base64;
     else if (win) win.close();
-    toast(out.carrier + ' label made. Tracking ' + out.tracking + (out.note ? '. ' + out.note : ''), !!out.note);
+    toast(out.carrier + ' label made. Tracking ' + out.tracking + (out.note ? '. ' + out.note : '') + (out.release_note ? ' ' + out.release_note : (curRec() && !curRec().is_test ? ' Added to the Release Board in Pending, waiting for payment.' : '')), !!(out.note || out.release_note));
   } catch (e) {
     if (win) win.close();
     b.disabled = false; b.textContent = 'Create label';
