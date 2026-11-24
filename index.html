@@ -111,6 +111,14 @@ label.l{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mu
 .sec-h{width:100%;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;background:transparent;border:0;color:var(--text);text-align:left;min-height:48px}
 .sec.open .sec-h{background:var(--raised)}
 .sec-b{padding:6px 16px 16px;display:flex;flex-direction:column;gap:6px}
+.arow.subrow{padding-left:22px;border-left:2px solid var(--line);margin-left:6px}
+.side{align-self:stretch}
+.pin{position:sticky;top:12px;z-index:3;border-color:var(--warn)}
+.plan-tab{position:fixed;right:0;top:45%;z-index:40;writing-mode:vertical-rl;transform:rotate(180deg);background:var(--teal);color:#0f1214;border:none;border-radius:0 8px 8px 0;padding:14px 8px;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.plan-tab .kc{display:inline-block;transform:rotate(180deg);background:#0f1214;color:var(--teal);border-radius:8px;padding:1px 5px;font-size:11px}
+#plan-drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);background:var(--bg,#0f1214);border-left:1px solid var(--line2);box-shadow:-8px 0 24px rgba(0,0,0,.45);z-index:60;padding:16px;overflow-y:auto;transform:translateX(105%);transition:transform .2s}
+#plan-drawer.open{transform:none}
+@media (prefers-reduced-motion: reduce){#plan-drawer{transition:none}}
 .arow{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
 .arow.miss .alab::after{content:' •';color:var(--warn)}
 .alab{width:230px;font-weight:600}
@@ -252,7 +260,7 @@ const QC_CHECKS = [
   ['function', 'Cocking, loading, trigger and safety all work correctly'],
   ['tests', 'Velocity results reviewed'],
   ['fixed', 'The problem the customer reported is fixed'],
-  ['clean', 'Exterior cleaned, no new marks or damage'],
+  ['clean', 'No new marks or damage'],
   ['complete', 'Everything that came in goes back (magazines, accessories)'],
   ['report', 'Service Report reviewed']
 ];
@@ -336,6 +344,7 @@ function siblingsHtml(r) {
 function recordFor(t) { return records.find(r => String(r.repair_ticket_id) === String(t.id)); }
 
 // ── DATA ────────────────────────────────────────────────
+let staff = [];   // everyone with an app login, for "QC done by"
 async function loadAll() {
   const [a, b] = await Promise.all([
     // Only repairs started here ("new" process). Older rifles finish in the Repair Queue.
@@ -354,6 +363,7 @@ async function loadAll() {
   }
   const o = await sb.from('rr_options').select('*').order('sort', { ascending: true }).order('value', { ascending: true });
   options = o.error ? [] : (o.data || []);
+  if (!staff.length) { const pp = await sb.rpc('task_people'); staff = pp.error ? [] : (pp.data || []); }
   const sv = await sb.from('rr_surveys').select('*').order('created_at', { ascending: false });
   surveys = sv.error ? [] : (sv.data || []);
   if (!partsLoaded) loadParts();
@@ -408,6 +418,8 @@ async function logEvent(recordId, kind, text, minutes) {
 function render() { if (view === 'record') renderRecord(); else renderList(); }
 function renderList() {
   view = 'list';
+  if (planOpen) { planOpen = false; const el = document.getElementById('plan-drawer'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } }
+  const pt = document.getElementById('plan-tab-holder'); if (pt) pt.remove();
   const v = document.getElementById('view');
   v.innerHTML = `<div class="bar" style="justify-content:space-between;align-items:flex-end;">
       <div><h1>Repairs</h1><p class="lede">New rifles start here with “New repair”. Rifles already in the Repair Queue finish there.</p></div>
@@ -849,12 +861,21 @@ function setPrefillStatus(m) { prefillMsg = m; const el = document.getElementByI
 
 // ── RECORD ──────────────────────────────────────────────
 async function openRecord(id) {
+  if (planOpen) { planOpen = false; const pd = document.getElementById('plan-drawer'); if (pd) { pd.classList.remove('open'); pd.innerHTML = ''; } }
   openRecordId = id; view = 'record'; prefillMsg = ''; recTab = STEP_TAB[(records.find(x => x.id === id) || {}).step] || 'Assessment'; openSecs = new Set(); sendMsg = null; otherFor = null;
   await Promise.all([loadEvents(id), loadPhotos(id), loadStandards()]);
   renderRecord();
   window.scrollTo(0, 0);
 }
 function renderRecord(keepScroll) {
+  renderRecordInner(keepScroll);
+  const r = records.find(x => x.id === openRecordId), old = document.getElementById('plan-tab-holder');
+  if (old) old.remove();
+  if (view === 'record' && r && !planOpen && STEPS.indexOf(r.step) <= STEPS.indexOf('Repair')) {
+    const d = document.createElement('div'); d.id = 'plan-tab-holder'; d.innerHTML = planButton(r); document.body.appendChild(d);
+  }
+}
+function renderRecordInner(keepScroll) {
   const r = records.find(x => x.id === openRecordId);
   const v = document.getElementById('view');
   if (!r) { v.innerHTML = '<div class="empty">This record no longer exists.</div>'; return; }
@@ -889,10 +910,11 @@ function renderRecord(keepScroll) {
         <div class="card"><h2 style="margin-bottom:8px;">History</h2><ul class="hist">${events.length ? events.map(e => `<li>${esc(e.text)}<div class="when">${esc(e.by_email === 'system' ? 'Automatic' : nameOf(e.by_email))}, ${fmtDT(e.at)}</div></li>`).join('') : '<li class="muted">No history yet.</li>'}</ul></div>
       </div>
       <div class="side">
+        <div class="card pin" aria-label="What the customer told us">${fieldHtml(r, 'issue', 'What the customer told us')}</div>
         <div class="card">
           <div class="bar" style="justify-content:space-between;margin-bottom:6px;"><h2>Report page 1</h2><button class="btn sm" onclick="prefill('${r.id}')">Refill from Freshdesk</button></div>
           <div class="note" id="prefill-status">${esc(prefillMsg || 'Fills itself from the Repair Queue, Freshdesk and the serial lookup. Click any value to edit it.')}</div>
-          ${FIELDS.map(([k, label]) => fieldHtml(r, k, label)).join('')}
+          ${FIELDS.filter(([k]) => k !== 'issue').map(([k, label]) => fieldHtml(r, k, label)).join('')}
           ${fieldHtml(r, '__received', 'Date received')}
         </div>
         <div class="card" style="display:flex;flex-direction:column;gap:8px;"><h2>Customer status page</h2>
@@ -1148,23 +1170,20 @@ async function saveLiftSafety() {
 }
 
 // ── ASSESSMENT (Mathias's Initial Rifle Assessment, A–H) ──
+// Section ids are fixed (answers are saved under them); the letter shown is the section's position.
 const SECTIONS = [
+  { id: 'B', title: 'Configuration / completeness', rows: [
+    ['config', 'Configuration (all that apply)', ['Factory original', 'Aftermarket', 'Modified', 'Unknown'], 'multi'],
+    ['parts', 'Required / received parts', ['Complete', 'Missing items', 'Unable to determine', 'Not applicable']],
+    ['packaging', 'Packaging / transport', ['Intact', 'Damaged', 'No packaging', 'Not inspected']]] },
   { id: 'A', title: 'External condition', rows: [
-    ['packaging', 'Packaging / transport', ['Intact', 'Damaged', 'No packaging', 'Not inspected']],
     ['stock', 'Stock / chassis / finish', ['Good', 'Cosmetic damage', 'Structural damage', 'Not inspected']],
     ['action', 'Action / block exterior', ['Good', 'Cosmetic damage', 'Damage observed', 'Not inspected']],
     ['shroud', 'Barrel housing / shroud', ['Good', 'Cosmetic damage', 'Damage observed', 'Not inspected']],
-    ['rail', 'Scope rail / mounts', ['Good', 'Loose', 'Damaged', 'Missing', 'Not inspected']],
-    ['bottle', 'Bottle / cylinder exterior', ['Good', 'Cosmetic damage', 'Damage observed', 'Not inspected']],
-    ['fasteners', 'Fasteners / exposed parts', ['Secure', 'Loose', 'Damaged', 'Missing', 'Not inspected']]] },
-  { id: 'B', title: 'Configuration / completeness', rows: [
-    ['config', 'Configuration (all that apply)', ['Factory original', 'Aftermarket', 'Modified', 'Unknown'], 'multi'],
-    ['parts', 'Required / received parts', ['Complete', 'Missing items', 'Unable to determine', 'Not applicable']]] },
-  { id: 'C', title: 'Air system, as received', rows: [
-    ['bottle_p', 'Bottle / cylinder pressure', ['Arrived empty (0 bar)', 'Reading', 'Not recorded'], null, 'bottle_bar'],
-    ['reg_p', 'Regulator pressure', ['No pressure / empty', 'Reading', 'Not readable'], null, 'reg_bar'],
-    ['fittings', 'Fittings / gauges', ['Good', 'Damage observed', 'Not inspected']],
-    ['leak', 'Air leakage', ['No leak detected', 'Leak detected', 'Not tested']]] },
+    ['alignment', 'Barrel assembly / alignment', ['Good', 'Issue observed', 'Not inspected'], null, null, 'sub'],
+    ['bore', 'Visible bore / liner condition', ['Good', 'Contamination', 'Damage', 'Not inspected'], null, null, 'sub'],
+    ['rail', 'Rail', ['Good', 'Loose', 'Damaged', 'Missing', 'Not inspected']],
+    ['bottle', 'Bottle / cylinder exterior', ['Good', 'Cosmetic damage', 'Damage observed', 'Not inspected']]] },
   { id: 'D', title: 'Mechanical / function', rows: [
     ['cocking', 'Cocking lever', ['Pass', 'Fail', 'Not tested']],
     ['magazine', 'Magazine fit / condition', ['Pass', 'Fail', 'Not tested', 'Other']],
@@ -1172,24 +1191,35 @@ const SECTIONS = [
     ['trigger', 'Trigger / safety', ['Pass', 'Fail', 'Not tested']],
     ['controls', 'External controls / adjusters', ['Pass', 'Fail', 'Not tested']],
     ['noise', 'Mechanical resistance / noise', ['None observed', 'Abnormality observed', 'Not tested']]] },
-  { id: 'E', title: 'Barrel / visible internal condition', rows: [
-    ['alignment', 'Barrel assembly / alignment', ['Good', 'Issue observed', 'Not inspected']],
-    ['bore', 'Visible bore / liner condition', ['Good', 'Contamination', 'Damage', 'Not inspected']]] },
-  { id: 'F', title: 'Functional / performance observations', rows: [
+  { id: 'C', title: 'Air system, as received', rows: [
+    ['bottle_p', 'Bottle / cylinder pressure', ['Arrived empty (0 bar)', 'Reading', 'Not recorded'], null, 'bottle_bar'],
+    ['reg_p', 'Regulator pressure', ['No pressure / empty', 'Reading', 'Not readable'], null, 'reg_bar'],
+    ['fittings', 'Fittings / gauges', ['Good', 'Damage observed', 'Not inspected']],
+    ['leak', 'Air leakage', ['No leak detected', 'Leak detected', 'Not tested']]] },
+  { id: 'F', title: 'Function / performance observations', rows: [
     ['reproduced', 'Reported concern reproduced', ['Yes', 'No', 'Not applicable']],
-    ['functional', 'Functional test', ['Pass', 'Fail', 'Not tested']],
-    ['chrono', 'Chronograph / velocity test', ['Pass', 'Fail', 'Not tested']],
+    ['chrono', 'Chronograph / velocity test', ['Completed', 'Not tested']],
     ['accuracy', 'Accuracy test', ['Pass', 'Fail', 'Not tested']]] },
   { id: 'G', title: 'Assessment conclusion', rows: [
     ['overall', 'Overall status', ['No issues observed', 'Issues identified', 'Incomplete']]] },
   { id: 'H', title: 'Repair plan', internal: true, rows: [] }
 ];
+function secLetter(s) { return 'ABCDEFGH'[SECTIONS.indexOf(s)] || s.id; }
 const CUSTOMER_SECS = SECTIONS.filter(s => !s.internal).map(s => s.id);
 let openSecs = new Set(), recTab = 'Assessment', photos = [], photoUrls = {}, saveTimer = null, saving = false;
 
 function asOf(r) { const a = r.assessment && typeof r.assessment === 'object' ? r.assessment : {}; migrateAssessment(a); return a; }
 // Older records: F "reproduced" used Pass/Fail/Not tested; H had three note boxes. Converted when shown, saved on the next edit.
 function migrateAssessment(a) {
+  if (!(a.__v3)) {
+    // Nov 2026 layout: packaging moved A → B, barrel alignment / bore moved E → A, velocity is Completed / Not tested
+    const mv = (from, to, key) => { const f = a[from] && a[from].v; if (!f || f[key] == null) return; if (!a[to]) a[to] = { v: {} }; if (!a[to].v) a[to].v = {}; if (a[to].v[key] == null) a[to].v[key] = f[key]; delete f[key]; };
+    mv('A', 'B', 'packaging'); mv('E', 'A', 'alignment'); mv('E', 'A', 'bore');
+    const F = a.F && a.F.v; if (F && (F.chrono === 'Pass' || F.chrono === 'Fail')) F.chrono = 'Completed';
+    if (F) delete F.functional;
+    if (a.A && a.A.v) delete a.A.v.fasteners;
+    Object.defineProperty(a, '__v3', { value: true, enumerable: false, configurable: true });
+  }
   if (a.__v >= 2) return;
   const F = a.F && a.F.v;
   if (F && F.reproduced) F.reproduced = ({ 'Pass': 'Yes', 'Fail': 'No', 'Not tested': 'Not applicable' })[F.reproduced] || F.reproduced;
@@ -1200,6 +1230,9 @@ function migrateAssessment(a) {
   }
   Object.defineProperty(a, '__v', { value: 2, enumerable: false, configurable: true });
 }
+// Every assessment item can be marked "Not performed" (no reason needed), unless it already has a not-done choice
+const NOT_DONE = 'Not performed';
+function rowOpts(row) { const o = row[2] || []; return o.some(x => /^not (inspected|tested|applicable|performed|recorded|readable)$/i.test(x)) ? o : o.concat(NOT_DONE); }
 function secData(r, id) { const a = asOf(r); if (!a[id]) a[id] = { v: {} }; if (!a[id].v) a[id].v = {}; r.assessment = a; return a[id]; }
 function rowMissing(d, row) {
   const [key, , , kind, extra] = row, v = d.v[key];
@@ -1231,11 +1264,11 @@ function renderAssessment(r) {
   let h = `<div class="bar" style="justify-content:space-between;">
       <span><b>${done} of ${CUSTOMER_SECS.length}</b> customer sections done${r.assessed_at ? ` · finished by ${esc(nameOf(r.assessed_by))} on ${fmtDate(r.assessed_at)}` : ''}</span>
       <span class="note" id="as-status">Saves automatically</span></div>
-    <p class="note">Fill this in as received, before any adjustment, cleaning or repair. Sections A–G go on the customer’s Service Report; the safety check and H stay internal.</p>`;
+    <p class="note">Fill this in as received, before any adjustment, cleaning or repair. Sections A–F go on the customer’s Service Report; the safety check and G (Repair plan) stay internal.</p>`;
   h += safetyCard(r);
   const open = safetyReady(r);
   if (!open) h += `<p class="note">${onSafetyHold(r) ? 'Sections A–H are locked while the rifle is on safety hold.' : 'Answer the safety check first. Sections A–H open after that.'}</p>`;
-  h += `<div class="${open ? '' : 'locked'}" ${open ? '' : 'aria-disabled="true"'} style="display:flex;flex-direction:column;gap:12px;">` + SECTIONS.map(s => `<div class="sec ${openSecs.has(s.id) ? 'open' : ''}" id="sec-${s.id}">${secInner(r, s)}</div>`).join('') + '</div>';
+  h += `<div class="${open ? '' : 'locked'}" ${open ? '' : 'aria-disabled="true"'} style="display:flex;flex-direction:column;gap:12px;">` + SECTIONS.map(s => s.id === 'H' && planOpen ? `<div class="sec"><button class="sec-h" onclick="closePlan()"><span><b>${secLetter(s)} · ${esc(s.title)}</b> <span class="pill">Open in the side panel</span></span></button></div>` : `<div class="sec ${openSecs.has(s.id) ? 'open' : ''}" id="sec-${s.id}">${secInner(r, s)}</div>`).join('') + '</div>';
   const ready = done === CUSTOMER_SECS.length && open;
   h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;">
       <b>Finish the assessment</b>
@@ -1247,12 +1280,12 @@ function renderAssessment(r) {
 function secInner(r, s) {
   const d = secData(r, s.id), st = secStatus(r, s);
   const badge = st === 'done' ? '<span class="pill step">Done</span>' : st === 'partial' ? '<span class="pill hold">In progress</span>' : '<span class="pill">Not started</span>';
-  let h = `<button class="sec-h" onclick="toggleSec('${s.id}')" aria-expanded="${openSecs.has(s.id)}"><span><b>${s.id} · ${esc(s.title)}</b>${s.internal ? ' <span class="pill">Internal only</span>' : ''}</span>${badge}</button>`;
+  let h = `<button class="sec-h" onclick="toggleSec('${s.id}')" aria-expanded="${openSecs.has(s.id)}"><span><b>${secLetter(s)} · ${esc(s.title)}</b>${s.internal ? ' <span class="pill">Internal only</span>' : ''}</span>${badge}</button>`;
   if (!openSecs.has(s.id)) return h;
   h += '<div class="sec-b">';
   s.rows.forEach(row => {
-    const [key, label, opts, kind, extra] = row, val = d.v[key], miss = rowMissing(d, row);
-    h += `<div class="arow ${miss ? 'miss' : ''}"><span class="alab">${esc(label)}</span><div class="opts">` +
+    const [key, label, , kind, extra, sub] = row, opts = rowOpts(row), val = d.v[key], miss = rowMissing(d, row);
+    h += `<div class="arow ${miss ? 'miss' : ''} ${sub === 'sub' ? 'subrow' : ''}"><span class="alab">${sub === 'sub' ? '↳ ' : ''}${esc(label)}</span><div class="opts">` +
       opts.map(o => { const on = kind === 'multi' ? (Array.isArray(val) && val.includes(o)) : val === o;
         return `<button type="button" class="opt ${on ? 'on' : ''}" aria-pressed="${on}" onclick="${kind === 'multi' ? 'toggleMulti' : 'setOpt'}('${s.id}','${key}',${JSON.stringify(o).replace(/"/g, '&quot;')})">${esc(o)}</button>`; }).join('') +
       (extra && val === 'Reading' ? `<input class="mini" type="number" inputmode="decimal" placeholder="bar" value="${esc(d.v[extra] || '')}" oninput="setVal('${s.id}','${extra}',this.value)" aria-label="${esc(label)} reading in bar"><span class="note">bar</span>` : '') +
@@ -1289,10 +1322,31 @@ function partRow(p, i) {
     <button class="btn sm ghost" onclick="removePart(${i})" aria-label="Remove part">Remove</button></div>`;
 }
 function curRec() { return records.find(x => x.id === openRecordId); }
+// ── REPAIR PLAN PULL-OUT ────────────────────────────────
+// The repair plan (G) can be opened from the side at any point, so the tech can note work and
+// expected parts while going through the assessment instead of remembering them for the end.
+let planOpen = false;
+function planCount(r) { const H = (asOf(r).H || {}).v || {}; return (Array.isArray(H.parts) ? H.parts.filter(p => String(p.desc || p.pn || '').trim()).length : 0) + (String(H.notes || '').trim() ? 1 : 0); }
+function planButton(r) { return `<button class="plan-tab" onclick="openPlan()" aria-label="Open the repair plan">📝 Repair plan${planCount(r) ? ` <span class="kc">${planCount(r)}</span>` : ''}</button>`; }
+function openPlan() {
+  const r = curRec(); if (!r) return;
+  planOpen = true; openSecs.add('H');
+  const s = SECTIONS.find(x => x.id === 'H');
+  let el = document.getElementById('plan-drawer');
+  if (!el) { el = document.createElement('aside'); el.id = 'plan-drawer'; el.setAttribute('aria-label', 'Repair plan'); document.body.appendChild(el); }
+  renderRecord(true);   // the main list now shows "Open in the side panel" for G
+  el.innerHTML = `<div class="bar" style="justify-content:space-between;margin-bottom:8px;"><b>📝 Repair plan</b><button class="btn sm" onclick="closePlan()">Close</button></div>
+    <p class="note" style="margin-bottom:8px;">Note the work and expected parts as you find them. It’s the same repair plan as section ${secLetter(s)}.</p>
+    <div class="sec open" id="sec-H">${secInner(r, s)}</div>`;
+  el.classList.add('open');
+}
+function closePlan() { planOpen = false; const el = document.getElementById('plan-drawer'); if (el) { el.classList.remove('open'); el.innerHTML = ''; } renderRecord(true); }
 function rerenderSec(id) { const r = curRec(), s = SECTIONS.find(x => x.id === id), el = document.getElementById('sec-' + id); if (r && s && el) { el.className = 'sec ' + (openSecs.has(id) ? 'open' : ''); el.innerHTML = secInner(r, s); } }
 function toggleSec(id) { openSecs.has(id) ? openSecs.delete(id) : openSecs.add(id); rerenderSec(id); }
 function setOpt(id, key, val) { const r = curRec(); const d = secData(r, id); d.v[key] = d.v[key] === val ? null : val; scheduleSave(); rerenderSec(id); refreshProgress(); }
-function toggleMulti(id, key, val) { const r = curRec(); const d = secData(r, id); const a = Array.isArray(d.v[key]) ? d.v[key] : []; d.v[key] = a.includes(val) ? a.filter(x => x !== val) : a.concat(val); scheduleSave(); rerenderSec(id); refreshProgress(); }
+function toggleMulti(id, key, val) { const r = curRec(); const d = secData(r, id); const a = Array.isArray(d.v[key]) ? d.v[key] : [];
+  // "Not performed" stands alone: picking it clears the others, picking another clears it
+  d.v[key] = a.includes(val) ? a.filter(x => x !== val) : val === NOT_DONE ? [NOT_DONE] : a.filter(x => x !== NOT_DONE).concat(val); scheduleSave(); rerenderSec(id); refreshProgress(); }
 function setVal(id, key, val) { const r = curRec(); secData(r, id).v[key] = val; scheduleSave(); if (/_other$/.test(key)) refreshProgress(); }
 function setNotes(id, which, val) { notesObj(id)[which] = val; scheduleSave(); if (id === 'W') refreshTestDone(); }
 function addPart() { const r = curRec(); const d = secData(r, 'H'); d.v.parts = (Array.isArray(d.v.parts) ? d.v.parts : []).concat({ qty: 1, desc: '', pn: '' }); scheduleSave(); rerenderSec('H'); }
@@ -1404,7 +1458,7 @@ async function deletePhoto(id) {
 }
 function phoneLink(sec) { return location.origin + location.pathname + '#phone=' + openRecordId + '&s=' + sec; }
 let qrPoll = null, qrSec = null;
-function secName(sec) { const x = EXTRA_PHOTO_SECS.find(e => e[0] === sec); if (x) return x[1]; const s = SECTIONS.find(e => e.id === sec); return s ? 'Section ' + s.id + ' · ' + s.title : 'section ' + sec; }
+function secName(sec) { const x = EXTRA_PHOTO_SECS.find(e => e[0] === sec); if (x) return x[1]; const s = SECTIONS.find(e => e.id === sec); return s ? 'Section ' + secLetter(s) + ' · ' + s.title : 'section ' + sec; }
 function qrCountText() { const r = curRec(); const n = photos.filter(p => p.section === qrSec).length;
   return `<b>${n}</b> photo${n === 1 ? '' : 's'} in ${esc(secName(qrSec))} on <b>${esc((r && r.freshdesk_ticket ? '#' + r.freshdesk_ticket + ' ' : '') + (r ? r.customer_name || '' : ''))}</b>`; }
 // Backup to live updates: while the QR window is open, check for new photos every 4 seconds
@@ -1669,10 +1723,14 @@ function stdText(std) {
 }
 function renderTesting(r) {
   const t = testsOf(r);
-  let h = `<h2 style="margin-top:6px;">Testing</h2><p class="note" style="margin:0;">Drop the chrono screenshot on a string. The shots are read for you.</p>`;
+  let h = `<h2 style="margin-top:6px;">Testing</h2><p class="note" style="margin:0;">Drop the chrono screenshot on a string. The shots are read for you.</p>
+    <label class="check" style="margin:6px 0;"><input type="checkbox" ${t.velocity_skipped ? 'checked' : ''} onchange="skipTest('velocity',this.checked)"> Velocity test not performed</label>`;
   if (!t.strings.length) t.strings.push(newString());
-  h += t.strings.map((s, i) => `<div class="card" id="str-${i}">${stringInner(r, s, i)}</div>`).join('');
-  h += `<div><button class="btn" onclick="addString()">Add another string</button></div>`;
+  if (t.velocity_skipped) h += `<p class="note">Shows as “Velocity test: Not performed” on the Service Report.</p>`;
+  else {
+    h += t.strings.map((s, i) => `<div class="card" id="str-${i}">${stringInner(r, s, i)}</div>`).join('');
+    h += `<div><button class="btn" onclick="addString()">Add another string</button></div>`;
+  }
   const unassigned = photos.filter(p => p.section === 'Chrono' && !t.strings.some(s => s.photo === p.path));
   if (unassigned.length) h += `<div class="card"><h2>Screenshots from a phone</h2><p class="note">Pick which string each one belongs to. It is read automatically.</p><div class="phs">${unassigned.map(p => `<div style="display:flex;flex-direction:column;gap:6px;"><div class="ph"><img src="${esc(photoUrls[p.path] || '')}" alt="Chrono screenshot"></div>${t.strings.map((s, i) => `<button class="btn sm" onclick="useScreenshot('${p.id}',${i})">Use for string ${i + 1}</button>`).join('')}</div>`).join('')}</div></div>`;
   h += `<div class="card" id="acc">${accuracyInner(r)}</div>`;
@@ -1700,7 +1758,7 @@ async function finishRepairTesting() {
   if (Math.max(0, STEPS.indexOf(r.step)) < STEPS.indexOf('QC')) { const st = Object.assign({}, r.step_times || {}); st.Repair = st.Repair || now; st.QC = now; patch.step = 'QC'; patch.step_times = st; }
   if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'Repair & testing done' + (patch.step ? ', moved to QC' : '')); recTab = STEP_TAB[r.step] || 'QC'; await loadEvents(r.id); renderRecord(true); window.scrollTo(0, 0); toast('Repair & testing marked done'); }
 }
-function newString() { return { id: Math.random().toString(36).slice(2, 8), pellet: '', grains: '', reg_bar: '', power: '', shots: [], unsure: [], photo: null }; }
+function newString() { return { id: Math.random().toString(36).slice(2, 8), pellet: '', grains: '', reg_bar: '', power_micro: '', power_macro: '', shots: [], unsure: [], photo: null }; }
 function stringInner(r, s, i) {
   const std = standardFor(r, s.pellet), st = stats(s.shots || [], s.grains || (std && std.grains)), v = verdict(st, std);
   const n = Math.max(10, (s.shots || []).length);
@@ -1718,7 +1776,9 @@ function stringInner(r, s, i) {
           <label class="l">Pellet<input value="${esc(s.pellet || '')}" oninput="setStr(${i},'pellet',this.value,true)" placeholder="${esc(std && std.pellet || 'e.g. JSB Exact 44.75')}"></label>
           <label class="l">Weight (gr)<input inputmode="decimal" value="${esc(s.grains || '')}" oninput="setStr(${i},'grains',this.value,true)" placeholder="${esc(std && std.grains || '')}"></label>
           <label class="l">Regulator (bar)<input inputmode="decimal" value="${esc(s.reg_bar || '')}" oninput="setStr(${i},'reg_bar',this.value)"></label>
-          <label class="l">Power setting<input value="${esc(s.power || '')}" oninput="setStr(${i},'power',this.value)"></label></div>
+          <label class="l">Power: Micro<input value="${esc(s.power_micro || '')}" oninput="setStr(${i},'power_micro',this.value)"></label>
+          <label class="l">Power: Macro<input value="${esc(s.power_macro || '')}" oninput="setStr(${i},'power_macro',this.value)"></label>
+          ${s.power ? `<span class="note">Earlier power setting: ${esc(s.power)}</span>` : ''}</div>
         <div class="shots">${shotIn}</div>
         ${(s.unsure || []).length ? '<span class="note" style="color:var(--warn);">Highlighted shots were hard to read on the screenshot. Please check them.</span>' : ''}
         <div><button class="btn sm ghost" onclick="addShot(${i})">Add a shot</button></div>
@@ -1744,7 +1804,8 @@ function callHtml(i, s, st) {
 function setResult(i, x) { const s = testsOf(curRec()).strings[i]; s.result = s.result === x ? null : x; scheduleSave(); redrawStats(i); }
 function testsReady(r) {
   const t = testsOf(r), done = t.strings.filter(x => stats(x.shots || []));
-  if (!done.length) return { ok: false, why: 'Record at least one velocity string first.' };
+  if (t.velocity_skipped) return { ok: true };
+  if (!done.length) return { ok: false, why: 'Record at least one velocity string, or mark the velocity test Not performed.' };
   if (STANDARDS_ON) return { ok: true };
   if (done.some(x => !x.result)) return { ok: false, why: 'Make the Pass/Fail call on every string with shots.' };
   if (String(t.accuracy.group_in || '').trim() && !t.accuracy.result) return { ok: false, why: 'Make the Pass/Fail call on the accuracy test.' };
@@ -1797,15 +1858,25 @@ async function readInto(i, dataUrl) {
   }
   scheduleSave(); redrawString(i);
 }
+function skipTest(which, on) {
+  const t = testsOf(curRec());
+  if (which === 'velocity') t.velocity_skipped = !!on; else t.accuracy.skipped = !!on;
+  scheduleSave(); renderRecord(true);
+}
+// Shots in the velocity strings (used to fill the accuracy test's shot count)
+function velocityShotCount(r) { return testsOf(r).strings.reduce((n, x) => n + (x.shots || []).filter(v => v != null && v !== '').length, 0); }
 function accuracyInner(r) {
   const a = testsOf(r).accuracy, std = standardFor(r, (testsOf(r).strings[0] || {}).pellet);
+  if (!a.shots && velocityShotCount(r)) a.shots = String(velocityShotCount(r));   // filled from the velocity test; can be changed
+  const skip = `<label class="check" style="margin:6px 0;"><input type="checkbox" ${a.skipped ? 'checked' : ''} onchange="skipTest('accuracy',this.checked)"> Accuracy test not performed</label>`;
+  if (a.skipped) return `<h2>Accuracy test</h2>${skip}<p class="note">Shows as “Accuracy test: Not performed” on the Service Report.</p>`;
   const g = Number(a.group_in), lim = std && std.acc_group_in != null ? Number(std.acc_group_in) : null;
   const res = a.group_in && lim != null ? (g <= lim ? '<b style="color:var(--teal-soft)">Within FX standard</b>' : '<b style="color:var(--red)">Outside FX standard</b>')
     : a.group_in ? ['Pass', 'Fail'].map(x => `<button type="button" class="opt ${x === 'Pass' ? 'pass' : 'fail'} ${a.result === x ? 'on' : ''}" onclick="setAccResult('${x}')">${x}</button>`).join(' ') : '';
   return `<h2>Accuracy test <span class="note" style="font-weight:400;">${std && std.acc_group_in != null ? 'FX standard: ' + esc(std.acc_group_in) + ' in at ' + esc(std.acc_distance_yd ?? '?') + ' yd' : '(optional)'}</span></h2>
-    <div class="grid4" style="margin-top:8px;">
+    ${skip}<div class="grid4" style="margin-top:8px;">
       <label class="l">Distance (yd)<input inputmode="decimal" value="${esc(a.distance_yd || '')}" oninput="setAcc('distance_yd',this.value)"></label>
-      <label class="l">Shots<input inputmode="numeric" value="${esc(a.shots || '')}" oninput="setAcc('shots',this.value)"></label>
+      <label class="l">Shots<input inputmode="numeric" value="${esc(a.shots || '')}" oninput="setAcc('shots',this.value)" title="Filled from the velocity test's shot count; change it if different"></label>
       <label class="l">Group size (in, center to center)<input inputmode="decimal" value="${esc(a.group_in || '')}" oninput="setAcc('group_in',this.value)"></label>
       <div class="l">Result<div id="acc-res" style="padding-top:8px;">${res}</div></div></div>
     ${photoBlock('Target', 'Target photo')}`;
@@ -1827,6 +1898,7 @@ function renderQC(r) {
   h += `<div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Sign off</b>
     ${same ? `<span class="note" style="color:var(--warn);">You also did the repair. Ideally someone else does QC.</span>` : ''}
     <span class="note" id="qc-why">${all ? 'All checks done.' : 'Tick every check to pass QC.'}</span>
+    <label class="l" style="max-width:320px;">QC done by<select id="qc-by">${(staff.length ? staff : [{ email: me, name: fullName(me) }]).map(p => `<option value="${esc(p.email)}" ${String(p.email).toLowerCase() === String(r.qc_by || me).toLowerCase() ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
     <div class="bar"><button class="btn primary" id="qc-pass" ${all && !before ? '' : 'disabled'} onclick="passQc()">QC passed → Ready to ship</button>
     <button class="btn" ${before ? 'disabled' : ''} onclick="failQc()">QC failed → back to Repair</button></div></div>`;
   return h;
@@ -1851,9 +1923,10 @@ async function passQc() {
   if (qcTimer) { clearTimeout(qcTimer); await saveQc(); }
   if (!QC_CHECKS.every(([k]) => qcOf(r).checks[k])) return toast('Tick every check first.', true);
   const now = new Date().toISOString();
-  const patch = { qc_by: me, qc_at: now, qc: r.qc };
+  const by = ((document.getElementById('qc-by') || {}).value || me).toLowerCase();
+  const patch = { qc_by: by, qc_at: now, qc: r.qc };
   if (STEPS.indexOf(r.step) < STEPS.indexOf('Ready to ship')) { const st = Object.assign({}, r.step_times || {}); st.QC = st.QC || now; st['Ready to ship'] = now; patch.step = 'Ready to ship'; patch.step_times = st; }
-  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'QC passed' + (patch.step ? ', moved to Ready to ship' : '')); await loadEvents(r.id); recTab = 'Report'; renderRecord(true); window.scrollTo(0, 0); toast('QC passed. The Service Report is ready.'); }
+  if (await patchRecord(patch)) { await logEvent(r.id, 'step', 'QC passed by ' + fullName(by) + (patch.step ? ', moved to Ready to ship' : '')); await loadEvents(r.id); recTab = 'Report'; renderRecord(true); window.scrollTo(0, 0); toast('QC passed. The Service Report is ready.'); }
 }
 function failQc() {
   document.getElementById('modal-body').innerHTML = `<h2>QC failed</h2>
@@ -1913,16 +1986,16 @@ function reportHtml(r) {
   h += `<h3>Assessment as received</h3><p style="margin:0 0 6px;color:#5a6168;">Recorded when the rifle arrived, before any adjustment, cleaning or repair.</p>`;
   SECTIONS.filter(s => !s.internal).forEach(s => {
     const d = a[s.id] || { v: {} }; d.v = d.v || {};
-    let rows = s.rows.map(row => { const val = rowText(d, row); return `<tr><td style="width:46%;">${esc(row[1])}</td><td class="${goodWord(val) ? 'ok' : badWord(val) ? 'bad' : ''}">${esc(val)}</td></tr>`; }).join('');
+    let rows = s.rows.map(row => { const val = rowText(d, row); return `<tr><td style="width:46%;${row[5] === 'sub' ? 'padding-left:18px;' : ''}">${row[5] === 'sub' ? '↳ ' : ''}${esc(row[1])}</td><td class="${goodWord(val) ? 'ok' : badWord(val) ? 'bad' : ''}">${esc(val)}</td></tr>`; }).join('');
     if (s.id === 'C' && d.v.leak === 'Leak detected') [1, 2, 3].forEach(n => { if (String(d.v['leak' + n] || '').trim()) rows += `<tr><td>Leak ${n} location</td><td>${esc(d.v['leak' + n])}</td></tr>`; });
     if (s.id === 'D' && d.v.abnormal) rows += `<tr><td>Details</td><td>${esc(d.v.abnormal)}</td></tr>`;
     if (s.id === 'F' && d.v.measurements) rows += `<tr><td>Measurements</td><td>${esc(d.v.measurements)}</td></tr>`;
-    h += `<div class="rep-avoid"><h4>${s.id} · ${esc(s.title)}</h4><table>${rows}</table>${String(d.text || '').trim() ? `<div class="say">${esc(d.text)}</div>` : ''}${repPics(s.id)}</div>`;
+    h += `<div class="rep-avoid"><h4>${secLetter(s)} · ${esc(s.title)}</h4><table>${rows}</table>${String(d.text || '').trim() ? `<div class="say">${esc(d.text)}</div>` : ''}${repPics(s.id)}</div>`;
   });
   if (r.quote_status === 'Declined') {
     h += `<div class="rep-avoid"><h3>Returned without repair</h3><div class="say">You chose not to go ahead with the repair, so no work was done. Your rifle is being returned in the condition described above.</div></div>
       <div class="rep-avoid"><h3>Sign-off</h3><div class="sig"><div><b>Assessed by</b><br>${esc(fullName(r.assessed_by) || '—')}<br>${fmtDate(r.assessed_at)}</div></div>
-      <div class="foot">FX Airguns · Questions about this report? Reply to your support ticket${r.freshdesk_ticket ? ' #' + esc(r.freshdesk_ticket) : ''} and our team will help.</div></div>`;
+      <div class="foot"><b>90-day limited service warranty on all repairs.</b><br>FX Airguns · Questions about this report? Reply to your support ticket${r.freshdesk_ticket ? ' #' + esc(r.freshdesk_ticket) : ''} and our team will help.</div></div>`;
     return h + '</div>';
   }
   // Work performed
@@ -1933,11 +2006,13 @@ function reportHtml(r) {
   // Test results
   const strs = t.strings.map(s => ({ s, st: stats(s.shots || [], s.grains) })).filter(x => x.st);
   h += `<div class="rep-avoid"><h3>Test results</h3>`;
-  if (strs.length) h += `<table><tr><th>String</th><th>Pellet</th><th>Weight</th><th>Regulator</th><th>Shots</th><th>Average</th><th>ES</th><th>SD</th><th>Energy</th><th>Result</th></tr>` +
+  if (t.velocity_skipped) h += '<p><b>Velocity test:</b> Not performed</p>';
+  else if (strs.length) h += `<table><tr><th>String</th><th>Pellet</th><th>Weight</th><th>Regulator</th><th>Shots</th><th>Average</th><th>ES</th><th>SD</th><th>Energy</th><th>Result</th></tr>` +
     strs.map(({ s, st }, i) => `<tr><td>${i + 1}</td><td>${esc(s.pellet || '—')}</td><td>${s.grains ? esc(s.grains) + ' gr' : '—'}</td><td>${s.reg_bar ? esc(s.reg_bar) + ' bar' : '—'}</td><td>${st.n}</td><td>${st.avg.toFixed(1)} fps</td><td>${st.es.toFixed(1).replace(/\.0$/, '')}</td><td>${st.sd.toFixed(1)}</td><td>${st.fpe == null ? '—' : st.fpe.toFixed(1) + ' ft·lb'}</td><td class="${s.result === 'Pass' ? 'ok' : s.result === 'Fail' ? 'bad' : ''}">${esc(s.result || '—')}</td></tr>`).join('') + '</table>';
   else h += '<p>No velocity test recorded.</p>';
   const acc = t.accuracy || {};
-  if (String(acc.group_in || '').trim()) {
+  if (acc.skipped) h += '<p style="margin-top:6px;"><b>Accuracy test:</b> Not performed</p>';
+  else if (String(acc.group_in || '').trim()) {
     const how = [acc.shots ? esc(acc.shots) + ' shots' : '', acc.distance_yd ? 'at ' + esc(acc.distance_yd) + ' yd' : ''].filter(Boolean).join(' ');
     h += `<p style="margin-top:6px;"><b>Accuracy:</b> ${how ? how + ', ' : ''}group ${esc(acc.group_in)} in (center to center)${acc.result ? ` · <span class="${acc.result === 'Pass' ? 'ok' : 'bad'}">${esc(acc.result)}</span>` : ''}</p>`;
   }
@@ -1948,7 +2023,7 @@ function reportHtml(r) {
     <div><b>Repaired by</b><br>${esc(fullName(r.repaired_by) || '—')}<br>${fmtDate(r.repaired_at)}</div>
     <div><b>Tested by</b><br>${esc(fullName(r.tested_by) || '—')}<br>${fmtDate(r.tested_at)}</div>
     <div><b>QC by</b><br>${esc(fullName(r.qc_by) || '—')}<br>${fmtDate(r.qc_at)}</div></div>
-    <div class="foot">FX Airguns · Questions about this report? Reply to your support ticket${r.freshdesk_ticket ? ' #' + esc(r.freshdesk_ticket) : ''} and our team will help.</div></div>`;
+    <div class="foot"><b>90-day limited service warranty on all repairs.</b><br>FX Airguns · Questions about this report? Reply to your support ticket${r.freshdesk_ticket ? ' #' + esc(r.freshdesk_ticket) : ''} and our team will help.</div></div>`;
   return h + '</div>';
 }
 function defaultMessage(r) {
@@ -2339,7 +2414,7 @@ function quoteProblem(r) {
 function quoteMessage(r) {
   const first = String(r.customer_name || '').trim().split(/\s+/)[0] || 'there';
   const model = r.model ? (/^fx/i.test(r.model) ? r.model : 'FX ' + r.model) : 'rifle';
-  return `Hi ${first},\n\nWe’ve inspected your ${model}${r.serial_number ? ' (serial ' + r.serial_number + ')' : ''} and put together a quote for the repair. It’s attached, with what we found and what the repair costs.\n\nTotal: ${usd(qTotal(quoteOf(r)))}\n\nPlease reply to this email to let us know whether you’d like us to go ahead with the repair, or have the rifle returned without repair.\n\nThank you,\nFX Airguns Service Team`;
+  return `Hi ${first},\n\nWe’ve inspected your ${model}${r.serial_number ? ' (serial ' + r.serial_number + ')' : ''} and put together a quote for the repair. It’s attached, with what we found and what the repair costs.\n\nTotal: ${usd(qTotal(quoteOf(r)))}\n\nPlease reply to this email to let us know whether you’d like us to go ahead with the repair. If you have any questions or concerns, just reply and we’ll work with you.\n\nThank you,\nFX Airguns Service Team`;
 }
 function renderQuote(r) {
   const q = quoteOf(r), locked = quoteDecided(r), atQuote = r.step === 'Quote', st = r.step_times || {};
