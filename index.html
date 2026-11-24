@@ -111,6 +111,18 @@ label.l{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mu
 .sec-h{width:100%;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;background:transparent;border:0;color:var(--text);text-align:left;min-height:48px}
 .sec.open .sec-h{background:var(--raised)}
 .sec-b{padding:6px 16px 16px;display:flex;flex-direction:column;gap:6px}
+.stagebox{border:1px solid var(--line);border-radius:12px;background:var(--panel,#161a1e);overflow:hidden}
+.stagebox.now{border-color:var(--teal)}
+.stagebox.later .stage-hd{opacity:.6}
+.stage-hd{display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:inherit;text-align:left;padding:14px 16px;font-size:15px;cursor:pointer}
+.stage-hd:hover{background:rgba(255,255,255,.03)}
+.stage-hd .sico{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;border:1px solid var(--line2);flex-shrink:0}
+.stagebox.done .sico{background:var(--teal);color:#0f1214;border-color:var(--teal)}
+.stagebox.now .sico{color:var(--teal);border-color:var(--teal)}
+.stage-hd .ssum{color:var(--muted,#9aa3ad);font-size:13px;flex:1}
+.stage-hd .chev{color:var(--muted,#9aa3ad)}
+.stage-bd{padding:0 16px 16px;display:flex;flex-direction:column;gap:12px}
+.stages .stage{cursor:pointer}
 .arow.subrow{padding-left:22px;border-left:2px solid var(--line);margin-left:6px}
 .side{align-self:stretch}
 .pin{position:sticky;top:12px;z-index:3;border-color:var(--warn)}
@@ -862,7 +874,8 @@ function setPrefillStatus(m) { prefillMsg = m; const el = document.getElementByI
 // ── RECORD ──────────────────────────────────────────────
 async function openRecord(id) {
   if (planOpen) { planOpen = false; const pd = document.getElementById('plan-drawer'); if (pd) { pd.classList.remove('open'); pd.innerHTML = ''; } }
-  openRecordId = id; view = 'record'; prefillMsg = ''; recTab = STEP_TAB[(records.find(x => x.id === id) || {}).step] || 'Assessment'; openSecs = new Set(); sendMsg = null; otherFor = null;
+  openStages = new Set(); lastFocus = null; flowLastStep = null;
+  openRecordId = id; view = 'record'; prefillMsg = ''; recTab = STEP_TAB[(records.find(x => x.id === id) || {}).step] || 'Assessment'; lastFocus = recTab; openSecs = new Set(); sendMsg = null; otherFor = null;
   await Promise.all([loadEvents(id), loadPhotos(id), loadStandards()]);
   renderRecord();
   window.scrollTo(0, 0);
@@ -890,7 +903,7 @@ function renderRecordInner(keepScroll) {
       <div class="bar">${r.report_sent_at ? `<span class="pill step">Report sent ${fmtDate(r.report_sent_at)}</span>` : ''}<button class="btn" onclick="recTab='Report';renderRecord(true)">Service Report</button>${r.is_test ? `<button class="btn ghost" onclick="deleteTestRecord()" title="Test records only">Delete test record</button>` : ''}</div>
     </div>
     <div class="card" style="margin-top:14px;">
-      <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}"><b>${esc(s === 'Received' && !r.received_at ? 'Incoming' : stepName(s))}</b><span>${st[s] ? fmtDate(st[s]) : (s === 'Received' && !r.received_at ? 'not arrived yet' : (i === si ? 'now' : ''))}</span></div>`).join('')}</div>
+      <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}" role="button" tabindex="0" title="Go to this step" onclick="jumpStage('${s}')"><b>${esc(s === 'Received' && !r.received_at ? 'Incoming' : stepName(s))}</b><span>${st[s] ? fmtDate(st[s]) : (s === 'Received' && !r.received_at ? 'not arrived yet' : (i === si ? 'now' : ''))}</span></div>`).join('')}</div>
       ${c ? `<div class="clock"><div class="track ${c.late ? 'late' : c.warn ? 'warn' : ''}"><div style="width:${Math.min(100, c.day / CLOCK_DAYS * 100)}%"></div></div>
         <b>${c.done ? 'Shipped on day ' + c.day : 'Day ' + c.day + ' of ' + CLOCK_DAYS}${c.paused ? ' · paused' : ''}</b><span class="muted">Received ${fmtDate(r.received_at)} · due ${fmtDate(c.due.toISOString())}${c.late && !c.done ? ' · late' : ''}${c.paused ? ' · paused at Quote since ' + fmtDate(r.quote_pause_since) : ''}${c.pausedDays >= 0.05 ? ' · ' + daysTxt(c.pausedDays) + ' paused for the quote' : ''}</span></div>`
         : `<div class="clock"><span class="muted">The 14-day clock starts when the rifle is received.</span><input type="date" id="rec-date" value="${isoToDate(new Date().toISOString())}" style="width:auto;"><button class="btn sm" onclick="setReceived()">Mark received</button></div>`}
@@ -905,8 +918,7 @@ function renderRecordInner(keepScroll) {
     </div>
     <div class="layout">
       <div class="mainc">
-        ${renderTabs(r)}
-        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${onSafetyHold(r) && recTab !== 'Assessment' ? `<div class="card"><b>On safety hold</b><span class="note">Nothing can be done on this rifle until management has advised and the hold is lifted.</span><div><button class="btn sm" onclick="goTab('Assessment')">Go to the safety check</button></div></div>` : recTab === 'Assessment' ? renderAssessment(r) : recTab === 'Quote' ? renderQuote(r) : recTab === RT_TAB ? renderRepairTesting(r) : recTab === 'QC' ? renderQC(r) : recTab === 'Report' ? renderReport(r) : '<div class="soon">Coming in a later install.</div>'}</div>
+        <div id="tabbody" style="display:flex;flex-direction:column;gap:12px;">${renderFlow(r)}</div>
         <div class="card"><h2 style="margin-bottom:8px;">History</h2><ul class="hist">${events.length ? events.map(e => `<li>${esc(e.text)}<div class="when">${esc(e.by_email === 'system' ? 'Automatic' : nameOf(e.by_email))}, ${fmtDT(e.at)}</div></li>`).join('') : '<li class="muted">No history yet.</li>'}</ul></div>
       </div>
       <div class="side">
@@ -924,6 +936,11 @@ function renderRecordInner(keepScroll) {
     </div>`;
   v.innerHTML = h;
   if (keepScroll) window.scrollTo(0, y);
+  if (recTab !== lastFocus) {
+    lastFocus = recTab; openStages.add(recTab);
+    const el = document.getElementById('stage-' + stageKey(recTab));
+    if (el) { if (!el.classList.contains('open')) { renderRecordInner(true); } const e2 = document.getElementById('stage-' + stageKey(recTab)); if (e2 && e2.scrollIntoView) e2.scrollIntoView({ block: 'start' }); }
+  }
 }
 function fieldHtml(r, k, label) {
   const src = (r.sources || {})[k === '__received' ? 'received_at' : k] || '';
@@ -1042,7 +1059,7 @@ async function moveStep(dir, to) {
   }
 }
 function skipQuote() { moveStep(1, 'Repair'); }
-function goTab(t) { recTab = t; renderRecord(true); const el = document.getElementById('tabbody'); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+function goTab(t) { recTab = t; openStages.add(t); lastFocus = null; renderRecord(true); }
 function openHold() {
   document.getElementById('modal-body').innerHTML = `<h2>Put on hold</h2>
     <p class="note">The 14-day clock keeps running. The reason is recorded so management can see what held it up.</p>
@@ -1252,6 +1269,44 @@ function secStatus(r, s) {
 }
 
 function hasQuoteTab(r) { return r.step === 'Quote' || !!r.quote_status || r.warranty !== 'Yes'; }
+// ── VERTICAL FLOW ───────────────────────────────────────
+// Every stage on one page, top to bottom: the current one open, finished ones folded to a one-line
+// summary (click to reopen), later ones greyed until reached. recTab = the stage to bring into view.
+let openStages = new Set(), lastFocus = null, flowLastStep = null;
+function flowStages(r) { return ['Assessment'].concat(hasQuoteTab(r) ? ['Quote'] : [], [RT_TAB, 'QC', 'Report']); }
+function stageKey(t) { return { 'Assessment': 'as', 'Quote': 'qt', [RT_TAB]: 'rt', 'QC': 'qc', 'Report': 'rp' }[t] || 'x'; }
+function stageSummary(r, t) {
+  if (t === 'Assessment') { const done = CUSTOMER_SECS.filter(id => secStatus(r, SECTIONS.find(s => s.id === id)) === 'done').length;
+    return r.assessed_at ? `Finished ${fmtDate(r.assessed_at)} by ${esc(nameOf(r.assessed_by))}` : `${done} of ${CUSTOMER_SECS.length} sections done`; }
+  if (t === 'Quote') return r.quote_status === 'Approved' ? `Approved ${fmtDate(r.quote_decided_at)}` : r.quote_status === 'Declined' ? `Declined ${fmtDate(r.quote_decided_at)}`
+    : r.quote_status === 'Sent' ? `Sent ${fmtDate(r.quote_sent_at)} · waiting on the customer` : r.step === 'Quote' ? 'Needs a quote' : 'Not started';
+  if (t === RT_TAB) return r.repaired_at ? `Finished ${fmtDate(r.repaired_at)}${r.repaired_by ? ' by ' + esc(nameOf(r.repaired_by)) : ''}` : r.step === 'Repair' ? 'In progress' : 'Not started';
+  if (t === 'QC') return r.qc_at ? `Passed ${fmtDate(r.qc_at)} by ${esc(fullName(r.qc_by))}` : r.step === 'QC' ? 'In progress' : 'Not started';
+  if (t === 'Report') return r.report_sent_at ? `Service Report sent ${fmtDate(r.report_sent_at)}` : (r.return_tracking ? 'Tracking added' : 'Return shipment and Service Report');
+  return '';
+}
+function setAsStatus(t) { document.querySelectorAll('.as-status').forEach(e => { e.textContent = t; }); }
+function renderFlow(r) {
+  const list = flowStages(r), cur = Math.max(0, list.indexOf(STEP_TAB[r.step] || 'Assessment'));
+  // When the repair moves to a new step, fold everything and open the new current step
+  if (flowLastStep !== null && flowLastStep !== r.step) { openStages = new Set([list[cur]]); }
+  flowLastStep = r.step;
+  if (!openStages.size) openStages.add(list[cur]);
+  return list.map((t, i) => {
+    const state = i < cur ? 'done' : i === cur ? 'now' : 'later', open = openStages.has(t), k = stageKey(t);
+    const icon = state === 'done' ? '✓' : state === 'now' ? '●' : '○';
+    const body = !open ? '' : (onSafetyHold(r) && t !== 'Assessment')
+      ? `<div class="card"><b>On safety hold</b><span class="note">Nothing can be done on this rifle until management has advised and the hold is lifted.</span><div><button class="btn sm" onclick="goTab('Assessment')">Go to the safety check</button></div></div>`
+      : t === 'Assessment' ? renderAssessment(r) : t === 'Quote' ? renderQuote(r) : t === RT_TAB ? renderRepairTesting(r) : t === 'QC' ? renderQC(r) : renderReport(r);
+    return `<section class="stagebox ${state} ${open ? 'open' : ''}" id="stage-${k}">
+      <button class="stage-hd" aria-expanded="${open}" onclick="toggleStage('${t}')"><span class="sico">${icon}</span><b>${i + 1}. ${esc(t)}</b>
+        <span class="ssum">${stageSummary(r, t)}</span>${state === 'now' ? '<span class="pill step">Current step</span>' : ''}<span class="chev">${open ? '▾' : '▸'}</span></button>
+      ${open ? `<div class="stage-bd">${body}</div>` : ''}</section>`;
+  }).join('');
+}
+function toggleStage(t) { if (openStages.has(t)) openStages.delete(t); else { openStages.add(t); recTab = t; } lastFocus = recTab; renderRecord(true); }
+// Jump from the step bar at the top: open that stage and scroll to it
+function jumpStage(step) { const t = STEP_TAB[step] || step; if (!flowStages(curRec()).includes(t)) return; recTab = t; openStages.add(t); lastFocus = null; renderRecord(true); }
 function renderTabs(r) {
   const avail = { 'Assessment': true, 'Quote': true, [RT_TAB]: true, 'QC': true, 'Report': true };
   const list = ['Assessment'].concat(hasQuoteTab(r) ? ['Quote'] : [], [RT_TAB, 'QC', 'Report']);
@@ -1263,7 +1318,7 @@ function renderAssessment(r) {
   if (!openSecs.size) { const first = SECTIONS.find(s => secStatus(r, s) !== 'done'); if (first) openSecs.add(first.id); }
   let h = `<div class="bar" style="justify-content:space-between;">
       <span><b>${done} of ${CUSTOMER_SECS.length}</b> customer sections done${r.assessed_at ? ` · finished by ${esc(nameOf(r.assessed_by))} on ${fmtDate(r.assessed_at)}` : ''}</span>
-      <span class="note" id="as-status">Saves automatically</span></div>
+      <span class="note as-status">Saves automatically</span></div>
     <p class="note">Fill this in as received, before any adjustment, cleaning or repair. Sections A–F go on the customer’s Service Report; the safety check and G (Repair plan) stay internal.</p>`;
   h += safetyCard(r);
   const open = safetyReady(r);
@@ -1359,7 +1414,7 @@ function refreshProgress() { if (recTab !== 'Assessment') return; const r = curR
   document.querySelectorAll('#tabbody .card .btn').forEach(b => { b.disabled = !ready; });
 }
 function scheduleSave() {
-  const st = document.getElementById('as-status'); if (st) st.textContent = 'Saving…';
+  setAsStatus('Saving…');
   clearTimeout(saveTimer); saveTimer = setTimeout(saveAssessment, 700);
 }
 async function saveAssessment() {
@@ -1367,7 +1422,7 @@ async function saveAssessment() {
   saving = true;
   const { error } = await sb.from('rr_records').update({ assessment: r.assessment || {}, work: r.work || {}, tests: r.tests || {} }).eq('id', r.id);
   saving = false;
-  const st = document.getElementById('as-status');
+  const st = { set textContent(v) { setAsStatus(v); } };
   if (error) { if (st) st.textContent = 'Not saved'; toast('Could not save: ' + error.message, true); }
   else if (st) st.textContent = 'Saved';
 }
@@ -1744,7 +1799,7 @@ function rtReady(r) {
 function renderRepairTesting(r) {
   const k = rtReady(r);
   const done = r.repaired_at && r.tested_at;
-  return `<div class="bar" style="justify-content:space-between;"><span>${done ? `Repair &amp; testing marked done by <b>${esc(nameOf(r.tested_by || r.repaired_by))}</b> on ${fmtDate(r.tested_at || r.repaired_at)}` : 'What was done, then the test results. The work and test results go on the Service Report.'}</span><span class="note" id="as-status">Saves automatically</span></div>
+  return `<div class="bar" style="justify-content:space-between;"><span>${done ? `Repair &amp; testing marked done by <b>${esc(nameOf(r.tested_by || r.repaired_by))}</b> on ${fmtDate(r.tested_at || r.repaired_at)}` : 'What was done, then the test results. The work and test results go on the Service Report.'}</span><span class="note as-status">Saves automatically</span></div>
     ${approvedQuoteBox(r)}<h2 style="margin-top:6px;">Repair</h2>${renderWork(r)}${renderTesting(r)}
     <div class="card" style="display:flex;flex-direction:column;gap:10px;"><b>Finish repair &amp; testing</b><span class="note" id="t-why">${k.ok ? 'Ready.' : esc(k.why)}</span>
       <div class="bar"><button class="btn primary" id="t-done" ${k.ok ? '' : 'disabled'} onclick="finishRepairTesting()">Repair &amp; testing done → QC</button></div></div>`;
@@ -1890,7 +1945,7 @@ function renderQC(r) {
   const q = qcOf(r), all = QC_CHECKS.every(([k]) => q.checks[k]);
   const before = STEPS.indexOf(r.step) < STEPS.indexOf('QC');
   const same = r.repaired_by && r.repaired_by === me;
-  let h = `<div class="bar" style="justify-content:space-between;"><span>${r.qc_at ? `QC passed by <b>${esc(fullName(r.qc_by))}</b> on ${fmtDate(r.qc_at)}` : 'Final check before the rifle goes back. Internal only: none of this goes on the report except who signed off.'}</span><span class="note" id="as-status">Saves automatically</span></div>`;
+  let h = `<div class="bar" style="justify-content:space-between;"><span>${r.qc_at ? `QC passed by <b>${esc(fullName(r.qc_by))}</b> on ${fmtDate(r.qc_at)}` : 'Final check before the rifle goes back. Internal only: none of this goes on the report except who signed off.'}</span><span class="note as-status">Saves automatically</span></div>`;
   if (before) h += `<div class="holdbox"><b>Repair &amp; testing isn’t finished yet.</b><span class="note" style="color:var(--warn);">You can look through the checklist, but QC can only be signed off once the record reaches QC.</span></div>`;
   h += `<div class="card"><h2 style="margin-bottom:4px;">Checklist</h2>` + QC_CHECKS.map(([k, label]) =>
     `<label class="qcrow"><input type="checkbox" ${q.checks[k] ? 'checked' : ''} onchange="setQc('${k}', this.checked)"><span>${esc(label)}</span></label>`).join('') +
@@ -1911,11 +1966,11 @@ function setQc(k, on) {
 }
 function setQcNote(v) { qcOf(curRec()).notes = v; saveQcSoon(); }
 let qcTimer = null;
-function saveQcSoon() { const st = document.getElementById('as-status'); if (st) st.textContent = 'Saving…'; clearTimeout(qcTimer); qcTimer = setTimeout(saveQc, 600); }
+function saveQcSoon() { setAsStatus('Saving…'); clearTimeout(qcTimer); qcTimer = setTimeout(saveQc, 600); }
 async function saveQc() {
   qcTimer = null; const r = curRec(); if (!r) return;
   const { error } = await sb.from('rr_records').update({ qc: r.qc || {} }).eq('id', r.id);
-  const st = document.getElementById('as-status'); if (st) st.textContent = error ? 'Not saved' : 'Saved';
+  const st = { set textContent(v) { setAsStatus(v); } }; if (st) st.textContent = error ? 'Not saved' : 'Saved';
   if (error) toast('Could not save: ' + error.message, true);
 }
 async function passQc() {
