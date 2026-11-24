@@ -425,7 +425,9 @@ function renderList() {
 function stepCell(r) {
   if (!r) return '<span class="pill">Not started</span>';
   const c = clockOf(r);
-  let h = `<span class="pill step">${esc(stepName(r.step || 'Received'))}</span>`;
+  // Until the rifle actually arrives (Inbound marks it received), it's Incoming, not Received
+  const incoming = !r.received_at && (r.step || 'Received') === 'Received';
+  let h = incoming ? `<span class="pill">Incoming</span>` : `<span class="pill step">${esc(stepName(r.step || 'Received'))}</span>`;
   if (r.hold_reason) h += ` <span class="pill hold">On hold</span>`;
   if (r.step === 'Quote') h += ` <span class="pill hold">${r.quote_status === 'Sent' ? 'Quote sent' : 'Needs quote'}</span>`;
   if (r.quote_status === 'Declined') h += ` <span class="pill">Quote declined</span>`;
@@ -584,7 +586,7 @@ function renderRows() {
       list.map(t => { const r = recordFor(t);
         return `<tr class="row" onclick="openFromTicket(${Number(t.id)})"><td class="num" style="font-size:19px;color:var(--teal);">#${esc(t.ticket_number || '—')}</td>
         <td>${esc(t.customer_name)}</td><td>${esc((r && r.model) || t.model)}</td><td class="muted">${t.location === 'nc' ? 'NC' : 'CA'}${t.bin_location ? ' · Rack ' + esc(t.bin_location) : ''}</td>
-        <td>${r ? stepCell(r) : '<span class="pill">Not started</span>'}${!r || !r.received_at ? (t.incoming_tracking ? ' <span class="pill">On its way</span>' : '') : ''}</td></tr>`; }).join('') + '</tbody></table>';
+        <td>${r ? stepCell(r) : '<span class="pill">Incoming</span>'}${(!r || !r.received_at) && !t.incoming_tracking ? ' <span class="pill hold">No tracking yet</span>' : ''}</td></tr>`; }).join('') + '</tbody></table>';
   } else {
     const list = records.filter(r => r.is_test && hit(r.freshdesk_ticket, r.customer_name, r.model, r.serial_number));
     if (!list.length) { el.innerHTML = '<div class="empty">No test repairs yet. Use “New test repair” to make one.</div>'; return; }
@@ -867,7 +869,7 @@ function renderRecord(keepScroll) {
       <div class="bar">${r.report_sent_at ? `<span class="pill step">Report sent ${fmtDate(r.report_sent_at)}</span>` : ''}<button class="btn" onclick="recTab='Report';renderRecord(true)">Service Report</button>${r.is_test ? `<button class="btn ghost" onclick="deleteTestRecord()" title="Test records only">Delete test record</button>` : ''}</div>
     </div>
     <div class="card" style="margin-top:14px;">
-      <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}"><b>${esc(stepName(s))}</b><span>${st[s] ? fmtDate(st[s]) : (i === si ? 'now' : '')}</span></div>`).join('')}</div>
+      <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}"><b>${esc(s === 'Received' && !r.received_at ? 'Incoming' : stepName(s))}</b><span>${st[s] ? fmtDate(st[s]) : (s === 'Received' && !r.received_at ? 'not arrived yet' : (i === si ? 'now' : ''))}</span></div>`).join('')}</div>
       ${c ? `<div class="clock"><div class="track ${c.late ? 'late' : c.warn ? 'warn' : ''}"><div style="width:${Math.min(100, c.day / CLOCK_DAYS * 100)}%"></div></div>
         <b>${c.done ? 'Shipped on day ' + c.day : 'Day ' + c.day + ' of ' + CLOCK_DAYS}${c.paused ? ' · paused' : ''}</b><span class="muted">Received ${fmtDate(r.received_at)} · due ${fmtDate(c.due.toISOString())}${c.late && !c.done ? ' · late' : ''}${c.paused ? ' · paused at Quote since ' + fmtDate(r.quote_pause_since) : ''}${c.pausedDays >= 0.05 ? ' · ' + daysTxt(c.pausedDays) + ' paused for the quote' : ''}</span></div>`
         : `<div class="clock"><span class="muted">The 14-day clock starts when the rifle is received.</span><input type="date" id="rec-date" value="${isoToDate(new Date().toISOString())}" style="width:auto;"><button class="btn sm" onclick="setReceived()">Mark received</button></div>`}
