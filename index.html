@@ -729,7 +729,7 @@ async function saveNewRepair(confirmed) {
     const top = await sb.from('repair_tickets').select('sort_order').order('sort_order', { ascending: false }).limit(1);
     row.sort_order = ((top.data && top.data[0] && top.data[0].sort_order) || 0) + 1;
     let res = await sb.from('repair_tickets').insert(row).select().single();
-    if (res.error && /id/i.test(res.error.message || '')) {     // table without an automatic id: use the next number
+    if (res.error && /\bid\b|duplicate key|pkey/i.test(res.error.message || '')) {     // no automatic id, or the id counter is behind: use the next free number
       const mx = await sb.from('repair_tickets').select('id').order('id', { ascending: false }).limit(1);
       row.id = ((mx.data && mx.data[0] && Number(mx.data[0].id)) || 0) + 1;
       res = await sb.from('repair_tickets').insert(row).select().single();
