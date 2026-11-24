@@ -345,6 +345,13 @@ async function loadAll() {
   if (a.error) throw a.error;
   if (b.error) throw b.error;
   tickets = a.data || []; records = (b.data || []).map(normStep);
+  // Records tied to a Repair Queue card that's still on the old process (e.g. opened here during
+  // testing) belong to the Repair Queue: leave them out of this app, its lists and the dashboard.
+  const linked = [...new Set(records.map(r => r.repair_ticket_id).filter(Boolean))].filter(id => !tickets.some(t => String(t.id) === String(id)));
+  if (linked.length) {
+    const o = await sb.from('repair_tickets').select('id,process').in('id', linked);
+    if (!o.error) { const old = new Set((o.data || []).filter(t => t.process !== 'new').map(t => String(t.id))); records = records.filter(r => !old.has(String(r.repair_ticket_id))); }
+  }
   const o = await sb.from('rr_options').select('*').order('sort', { ascending: true }).order('value', { ascending: true });
   options = o.error ? [] : (o.data || []);
   const sv = await sb.from('rr_surveys').select('*').order('created_at', { ascending: false });
@@ -509,8 +516,9 @@ function daysBetween(a, b) { return (new Date(b).getTime() - new Date(a).getTime
 function renderDash(el) {
   if (!holdLoaded) { holdLoaded = true; loadHoldEvents().then(() => { if (listTab === 'dash' && view === 'list') renderRows(); }); }
   const since = dashRange === 'all' ? 0 : Date.now() - Number(dashRange) * DAY;
-  const inRange = records.filter(r => r.received_at && new Date(r.received_at).getTime() >= since);
-  const open = records.filter(r => r.received_at && r.step !== 'Shipped');
+  const real = records.filter(r => !r.is_test);   // test repairs stay out of the numbers
+  const inRange = real.filter(r => r.received_at && new Date(r.received_at).getTime() >= since);
+  const open = real.filter(r => r.received_at && r.step !== 'Shipped');
   const late = open.filter(r => clockOf(r).late);
   const shipped = inRange.filter(r => r.step === 'Shipped' && r.step_times && r.step_times.Shipped);
   const turn = shipped.map(r => daysBetween(r.received_at, r.step_times.Shipped));
