@@ -112,6 +112,10 @@ label.l{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mu
 .sec.open .sec-h{background:var(--raised)}
 .sec-b{padding:6px 16px 16px;display:flex;flex-direction:column;gap:6px}
 .topcard{position:relative}
+.countdown{font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:700;letter-spacing:.02em;padding:2px 12px;border-radius:8px;background:rgba(58,166,160,.12);color:var(--teal);font-variant-numeric:tabular-nums;white-space:nowrap}
+.countdown.warn{background:rgba(212,167,44,.14);color:var(--warn)}
+.countdown.late{background:rgba(229,72,77,.14);color:var(--bad,#e5484d)}
+.countdown.paused{opacity:.75}
 .trkbox{display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
 @media (min-width:1250px){.trkbox{position:absolute;top:16px;right:16px;width:min(470px,36%);margin:0}.topcard .stages{max-width:calc(64% - 24px)}}
 .trk{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:10px;padding:9px 12px}
@@ -348,6 +352,20 @@ function pausedMs(r, end) {
   const running = r.quote_pause_since ? Math.max(0, (end || Date.now()) - new Date(r.quote_pause_since).getTime()) : 0;
   return (Number(r.clock_paused_ms) || 0) + running;
 }
+// Live countdown to the due date: "6d 14h 22m left", "Late by 1d 3h", frozen while paused at Quote
+function countdownText(dueMs, paused) {
+  let ms = dueMs - Date.now(); const late = ms < 0; ms = Math.abs(ms);
+  const d = Math.floor(ms / DAY), h = Math.floor(ms % DAY / 3600000), m = Math.floor(ms % 3600000 / 60000);
+  const t = (d ? d + 'd ' : '') + (d || h ? h + 'h ' : '') + m + 'm';
+  return (paused ? '⏸ ' : '⏱ ') + (late ? 'Late by ' + t : t + ' left') + (paused ? ' (paused)' : '');
+}
+setInterval(() => {
+  const el = document.getElementById('countdown'); if (!el) return;
+  const r = curRec(), c = r && clockOf(r);
+  if (c && c.paused) { el.textContent = countdownText(c.due.getTime(), true); return; }   // due moves with the pause: remaining stays put
+  el.textContent = countdownText(Number(el.dataset.due), false);
+  if (Number(el.dataset.due) < Date.now()) el.classList.add('late');
+}, 30000);
 function clockOf(r) {
   if (!r || !r.received_at) return null;
   const start = new Date(r.received_at).getTime();
@@ -923,6 +941,7 @@ function renderRecordInner(keepScroll) {
       ${trackingBox(r)}
       <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}" role="button" tabindex="0" title="Go to this step" onclick="jumpStage('${s}')"><b>${esc(s === 'Received' && !r.received_at ? 'Incoming' : stepName(s))}</b><span>${st[s] ? fmtDate(st[s]) : (s === 'Received' && !r.received_at ? 'not arrived yet' : (i === si ? 'now' : ''))}</span></div>`).join('')}</div>
       ${c ? `<div class="clock"><div class="track ${c.late ? 'late' : c.warn ? 'warn' : ''}"><div style="width:${Math.min(100, c.day / CLOCK_DAYS * 100)}%"></div></div>
+        ${!c.done ? `<span class="countdown ${c.late ? 'late' : c.warn ? 'warn' : ''} ${c.paused ? 'paused' : ''}" id="countdown" data-due="${c.due.getTime()}" data-paused="${c.paused ? 1 : 0}" role="timer" aria-live="off">${countdownText(c.due.getTime(), c.paused)}</span>` : ''}
         <b>${c.done ? 'Shipped on day ' + c.day : 'Day ' + c.day + ' of ' + CLOCK_DAYS}${c.paused ? ' · paused' : ''}</b><span class="muted">Received ${fmtDate(r.received_at)} · due ${fmtDate(c.due.toISOString())}${c.late && !c.done ? ' · late' : ''}${c.paused ? ' · paused at Quote since ' + fmtDate(r.quote_pause_since) : ''}${c.pausedDays >= 0.05 ? ' · ' + daysTxt(c.pausedDays) + ' paused for the quote' : ''}</span></div>`
         : `<div class="clock"><span class="muted">The 14-day clock starts when the rifle is received.</span><input type="date" id="rec-date" value="${isoToDate(new Date().toISOString())}" style="width:auto;"><button class="btn sm" onclick="setReceived()">Mark received</button></div>`}
       <div class="bar" style="margin-top:12px;">
