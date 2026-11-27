@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>FX Airguns · How did our support team do?</title>
+<style>
+  :root { --ink:#1b1f23; --muted:#5f6b76; --line:#dde2e6; --bg:#f3f5f7; --accent:#1b1f23; --sel:#1b1f23; --ok:#1f7a4d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  main { max-width:620px; margin:0 auto; padding:28px 18px 60px; }
+  .logo { font-weight:800; font-size:26px; letter-spacing:.04em; }
+  .logo small { display:block; font-weight:400; font-size:13px; color:var(--muted); letter-spacing:0; }
+  h1 { font-size:24px; margin:18px 0 4px; }
+  .sub { color:var(--muted); margin:0 0 18px; }
+  .q { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px 16px 14px; margin-bottom:12px; }
+  fieldset { border:none; margin:0; padding:0; }
+  legend { font-weight:600; margin-bottom:10px; padding:0; }
+  .scale { display:flex; flex-wrap:wrap; gap:8px; }
+  .scale label { flex:1 1 0; min-width:44px; }
+  .scale.wide label { flex:0 0 auto; min-width:auto; }
+  .scale input { position:absolute; opacity:0; pointer-events:none; }
+  .scale span { display:block; text-align:center; padding:10px 8px; border:1px solid var(--line); border-radius:8px; cursor:pointer; font-weight:600; background:#fff; user-select:none; }
+  .scale input:checked + span { background:var(--sel); border-color:var(--sel); color:#fff; }
+  .scale input:focus-visible + span { outline:3px solid #6aa0ff; outline-offset:2px; }
+  .ends { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:6px; }
+  .sublab { font-size:14px; color:var(--muted); margin:10px 0 6px; }
+  textarea { width:100%; min-height:110px; border:1px solid var(--line); border-radius:8px; padding:10px; font:inherit; resize:vertical; }
+  button.send { width:100%; background:var(--accent); color:#fff; border:none; border-radius:10px; padding:14px; font-size:17px; font-weight:700; cursor:pointer; margin-top:6px; }
+  button.send:disabled { opacity:.6; cursor:default; }
+  .err { color:#b42318; margin:10px 0; min-height:20px; }
+  .done { background:#fff; border:1px solid var(--line); border-radius:12px; padding:26px 20px; text-align:center; }
+  .done b { display:block; font-size:22px; margin-bottom:6px; color:var(--ok); }
+</style>
+</head>
+<body>
+<main>
+  <div class="logo">FX AIRGUNS<small>Customer Support</small></div>
+  <div id="app"><p class="sub" style="margin-top:20px;">Loading…</p></div>
+</main>
+<script>
+const SERVER = 'https://fx-tracking-server.onrender.com';
+const T = new URLSearchParams(location.search).get('t') || '';
+const app = document.getElementById('app');
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function scale(name, lo, hi, left, right) {
+  let h = `<div class="scale">`;
+  for (let i = lo; i <= hi; i++) h += `<label><input type="radio" name="${name}" value="${i}"><span>${i}</span></label>`;
+  return h + `</div><div class="ends"><span>${left}</span><span>${right}</span></div>`;
+}
+function choice(name, opts) { return `<div class="scale wide">${opts.map(o => `<label><input type="radio" name="${name}" value="${o}"><span>${o}</span></label>`).join('')}</div>`; }
+function q(title, inner) { return `<div class="q"><fieldset><legend>${title}</legend>${inner}</fieldset></div>`; }
+function thanks(msg) { app.innerHTML = `<div class="done" role="status"><b>Thank you!</b>${esc(msg || 'Your feedback helps us improve our support. We really appreciate it.')}</div>`; }
+async function load() {
+  try {
+    const r = await fetch(SERVER + '/support-survey?t=' + encodeURIComponent(T)), d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'This survey link is not valid.');
+    if (d.answered) return thanks('We already have your answers for this conversation.');
+    app.innerHTML = `<h1>How did our support team do?</h1>
+      <p class="sub">${d.first ? 'Hi ' + esc(d.first) + ', thanks' : 'Thanks'} for contacting FX Airguns${d.subject ? ' about <b>' + esc(d.subject) + '</b>' : ''}. It takes about a minute.</p>
+      <form id="f" novalidate>
+        ${q('1. Overall, how satisfied are you with the support you received?', scale('csat', 1, 5, 'Very dissatisfied', 'Very satisfied'))}
+        ${q('2. Was your question or issue resolved?', choice('resolved', ['Yes', 'Partly', 'No']))}
+        ${q('3. How satisfied were you with how quickly we responded?', scale('timeliness', 1, 5, 'Very dissatisfied', 'Very satisfied'))}
+        ${q('4. How would you rate our support team on…', `<div class="sublab">Knowledge</div>${scale('knowledge', 1, 5, 'Poor', 'Excellent')}<div class="sublab">Clear, easy-to-follow answers</div>${scale('clarity', 1, 5, 'Poor', 'Excellent')}<div class="sublab">Courtesy</div>${scale('courtesy', 1, 5, 'Poor', 'Excellent')}`)}
+        ${q('5. How easy was it to get the help you needed?', scale('effort', 1, 5, 'Very difficult', 'Very easy'))}
+        ${q('6. How likely are you to recommend FX Airguns to a friend?', scale('nps', 0, 10, 'Not at all likely', 'Extremely likely'))}
+        <div class="q"><label for="comment" style="font-weight:600;display:block;margin-bottom:8px;">7. What could we have done better? <span style="font-weight:400;color:var(--muted);">(optional)</span></label><textarea id="comment" maxlength="2000"></textarea></div>
+        <div class="err" id="err" role="alert"></div>
+        <button class="send" type="submit" id="send">Send my feedback</button>
+      </form>`;
+    document.getElementById('f').addEventListener('submit', submit);
+  } catch (e) { app.innerHTML = `<div class="done" role="alert"><b style="color:#b42318;">Sorry</b>${esc(e.message)}</div>`; }
+}
+async function submit(ev) {
+  ev.preventDefault();
+  const v = n => { const x = document.querySelector(`input[name="${n}"]:checked`); return x ? x.value : null; };
+  const body = { t: T, csat: Number(v('csat')), resolved: v('resolved'), timeliness: Number(v('timeliness')), knowledge: v('knowledge') ? Number(v('knowledge')) : null,
+    clarity: v('clarity') ? Number(v('clarity')) : null, courtesy: v('courtesy') ? Number(v('courtesy')) : null, effort: Number(v('effort')), nps: v('nps') == null ? null : Number(v('nps')),
+    comment: document.getElementById('comment').value };
+  const err = document.getElementById('err');
+  if (!v('csat') || !v('resolved') || !v('timeliness') || !v('effort') || v('nps') == null) { err.textContent = 'Please answer questions 1, 2, 3, 5 and 6.'; return; }
+  const btn = document.getElementById('send'); btn.disabled = true; btn.textContent = 'Sending…'; err.textContent = '';
+  try {
+    const r = await fetch(SERVER + '/support-survey', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok && r.status !== 409) throw new Error(d.error || 'Something went wrong. Please try again.');
+    thanks();
+  } catch (e) { err.textContent = e.message; btn.disabled = false; btn.textContent = 'Send my feedback'; }
+}
+load();
+</script>
+</body>
+</html>
