@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FX Airguns · Support KPIs</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0f1214;--panel:#161a1e;--raised:#1d2227;--line:#2a3138;--line2:#38424c;--text:#e6ebef;--muted:#9aa6b2;--dim:#6f7b86;
+    --teal:#3aa6a0;--good:#3fb27f;--warn:#d4a72c;--bad:#e5484d;--r:12px}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,system-ui,sans-serif}
+  main{max-width:1200px;margin:0 auto;padding:22px 22px 60px}
+  h1{font-family:'Barlow Condensed',sans-serif;font-size:34px;margin:0}
+  h2{font-family:'Barlow Condensed',sans-serif;font-size:22px;margin:0 0 10px}
+  .lede{color:var(--muted);margin:2px 0 18px}
+  .bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  select,button{font:inherit;background:var(--raised);color:var(--text);border:1px solid var(--line2);border-radius:8px;padding:7px 12px}
+  button{cursor:pointer} button:hover{border-color:var(--teal)}
+  .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+  .tile .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .tile .v{font-family:'Barlow Condensed',sans-serif;font-size:40px;line-height:1.05;margin:4px 0 2px}
+  .tile .s{font-size:12.5px;color:var(--dim)}
+  .good{color:var(--good)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+  .grid2{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:12px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:500}
+  .hb{display:flex;align-items:center;gap:8px;margin:7px 0}
+  .hb .l{width:150px;color:var(--muted);font-size:13px}
+  .hb .t{flex:1;height:12px;background:var(--raised);border-radius:6px;overflow:hidden}
+  .hb .t i{display:block;height:100%;background:var(--teal)}
+  .hb .n{width:44px;text-align:right;font-variant-numeric:tabular-nums}
+  .cmt{border-top:1px solid var(--line);padding:10px 0}
+  .cmt:first-child{border-top:none}
+  .cmt .m{font-size:12px;color:var(--muted);margin-bottom:4px}
+  .pill{display:inline-block;font-size:11.5px;border-radius:999px;padding:1px 8px;border:1px solid var(--line2);color:var(--muted);margin-left:6px}
+  a{color:var(--teal)}
+  .empty{color:var(--muted);padding:30px;text-align:center;border:1px dashed var(--line2);border-radius:var(--r)}
+  .chart{width:100%;height:190px}
+  #auth{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:9}
+  #auth.hidden{display:none}
+  .authbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:26px;width:320px;display:flex;flex-direction:column;gap:10px}
+  .authbox input{font:inherit;background:var(--bg);color:var(--text);border:1px solid var(--line2);border-radius:8px;padding:9px}
+  .note{font-size:12.5px;color:var(--dim)}
+  @media (max-width:900px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="auth"><div class="authbox"><b>Support KPIs</b><input id="em" type="email" placeholder="Email" autocomplete="username"><input id="pw" type="password" placeholder="Password" autocomplete="current-password"><button onclick="signIn()">Sign in</button><div id="aerr" class="note"></div></div></div>
+<main>
+  <div class="bar" style="justify-content:space-between;align-items:flex-end;">
+    <div><h1>Support KPIs</h1><p class="lede">From the customer support survey sent after tickets tagged for a survey. Scores are from customers who answered.</p></div>
+    <div class="bar">
+      <label class="note" for="range">Period</label>
+      <select id="range" onchange="render()"><option value="30">Last 30 days</option><option value="90" selected>Last 90 days</option><option value="365">Last 12 months</option><option value="ytd">This year</option><option value="all">All time</option></select>
+      <select id="agent" onchange="render()" aria-label="Agent"><option value="">All agents</option></select>
+      <button onclick="exportXlsx()">⬇ Excel</button>
+    </div>
+  </div>
+  <div id="view"><div class="empty">Loading…</div></div>
+</main>
+<script>
+const SB_URL = 'https://rhvmzaljkgqnwjcstnen.supabase.co', SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJodm16YWxqa2dxbndqY3N0bmVuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE3MTA0OTksImV4cCI6MjA5NzI4NjQ5OX0.3qPGkA9tyvTDWqPQrBjJUnp9_PzNxBJQ-NCv2dUo2DE';
+const sb = window.supabase.createClient(SB_URL, SB_KEY, { auth: { autoRefreshToken: (window.parent === window) } });
+const FD = 'https://fxairguns.freshdesk.com/a/tickets/';
+let rows = [], loaded = false;
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pct = (a, b) => b ? Math.round(a / b * 100) : null;
+const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+const f1 = n => n == null ? '—' : n.toFixed(1);
+const cls = (v, good, ok) => v == null ? '' : v >= good ? 'good' : v >= ok ? 'warn' : 'bad';
+async function load() {
+  const all = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('support_surveys').select('*').order('created_at', { ascending: false }).range(from, from + 999);
+    if (error) { document.getElementById('view').innerHTML = `<div class="empty">${esc(error.message)}</div>`; return; }
+    all.push(...data); if (data.length < 1000) break;
+  }
+  rows = all; loaded = true;
+  const ag = [...new Set(rows.map(r => r.agent_name).filter(Boolean))].sort();
+  document.getElementById('agent').innerHTML = '<option value="">All agents</option>' + ag.map(a => `<option>${esc(a)}</option>`).join('');
+  document.getElementById('agent').style.display = ag.length > 1 ? '' : 'none';
+  render();
+}
+function inRange(r) {
+  const v = document.getElementById('range').value, d = new Date(r.sent_at || r.created_at);
+  if (v === 'all') return true;
+  if (v === 'ytd') return d.getFullYear() === new Date().getFullYear();
+  return d >= new Date(Date.now() - Number(v) * 864e5);
+}
+function stats(list) {
+  const ans = list.filter(r => r.answered_at), sent = list.filter(r => r.sent_at);
+  const csat = ans.filter(r => r.csat != null), res = ans.filter(r => r.resolved), tim = ans.filter(r => r.timeliness != null), eff = ans.filter(r => r.effort != null), nps = ans.filter(r => r.nps != null);
+  const q = k => avg(ans.filter(r => r[k] != null).map(r => r[k]));
+  return { sent: sent.length, answered: ans.length, response: pct(ans.length, sent.length),
+    csat: pct(csat.filter(r => r.csat >= 4).length, csat.length), csatAvg: avg(csat.map(r => r.csat)),
+    resolved: pct(res.filter(r => r.resolved === 'Yes').length, res.length), partly: pct(res.filter(r => r.resolved === 'Partly').length, res.length),
+    timely: pct(tim.filter(r => r.timeliness >= 4).length, tim.length), timelyAvg: avg(tim.map(r => r.timeliness)),
+    knowledge: q('knowledge'), clarity: q('clarity'), courtesy: q('courtesy'),
+    easy: pct(eff.filter(r => r.effort >= 4).length, eff.length), effortAvg: avg(eff.map(r => r.effort)),
+    nps: nps.length ? Math.round((nps.filter(r => r.nps >= 9).length - nps.filter(r => r.nps <= 6).length) / nps.length * 100) : null,
+    prom: nps.filter(r => r.nps >= 9).length, pass: nps.filter(r => r.nps >= 7 && r.nps <= 8).length, det: nps.filter(r => r.nps <= 6).length };
+}
+function tile(k, v, s, c) { return `<div class="tile"><div class="k">${k}</div><div class="v ${c || ''}">${v}</div><div class="s">${s}</div></div>`; }
+function hbar(l, v, max, suffix) { return `<div class="hb"><span class="l">${l}</span><span class="t"><i style="width:${v == null ? 0 : Math.min(100, v / max * 100)}%"></i></span><span class="n">${v == null ? '—' : (suffix === '%' ? v + '%' : v.toFixed(1))}</span></div>`; }
+function trend(list) {
+  // last 6 months: CSAT % and number answered
+  const months = []; const now = new Date();
+  for (let i = 5; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); months.push({ y: d.getFullYear(), m: d.getMonth(), label: d.toLocaleDateString('en-US', { month: 'short' }) }); }
+  months.forEach(mo => { const a = list.filter(r => { if (!r.answered_at) return false; const d = new Date(r.answered_at); return d.getFullYear() === mo.y && d.getMonth() === mo.m; });
+    mo.n = a.length; mo.csat = pct(a.filter(r => r.csat >= 4).length, a.filter(r => r.csat != null).length); });
+  const W = 600, H = 170, bw = W / months.length;
+  const bars = months.map((mo, i) => { const h = mo.csat == null ? 0 : (mo.csat / 100) * (H - 40);
+    return `<rect x="${i * bw + bw * 0.22}" y="${H - 22 - h}" width="${bw * 0.56}" height="${h}" rx="4" fill="${mo.csat == null ? 'transparent' : mo.csat >= 85 ? '#3fb27f' : mo.csat >= 70 ? '#d4a72c' : '#e5484d'}"></rect>
+      <text x="${i * bw + bw / 2}" y="${H - 6}" text-anchor="middle" fill="#9aa6b2" font-size="12">${mo.label}</text>
+      <text x="${i * bw + bw / 2}" y="${H - 28 - h}" text-anchor="middle" fill="#e6ebef" font-size="12">${mo.csat == null ? '' : mo.csat + '%'}</text>
+      <text x="${i * bw + bw / 2}" y="14" text-anchor="middle" fill="#6f7b86" font-size="11">${mo.n ? mo.n + ' ans.' : ''}</text>`; }).join('');
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="CSAT by month, last 6 months">${bars}</svg>`;
+}
+function render() {
+  if (!loaded) return;
+  const agent = document.getElementById('agent').value;
+  const list = rows.filter(r => inRange(r) && (!agent || r.agent_name === agent));
+  const s = stats(list), v = document.getElementById('view');
+  if (!list.filter(r => r.sent_at).length) { v.innerHTML = '<div class="empty">No surveys sent in this period yet.</div>'; return; }
+  const agents = [...new Set(list.map(r => r.agent_name || 'Unassigned'))];
+  const comments = list.filter(r => r.answered_at && (r.comment || '').trim()).sort((a, b) => String(b.answered_at).localeCompare(a.answered_at)).slice(0, 15);
+  const queued = rows.filter(r => r.status === 'queued').length, skipped = list.filter(r => r.status === 'skipped').length;
+  v.innerHTML = `
+    <div class="tiles">
+      ${tile('CSAT', s.csat == null ? '—' : s.csat + '%', `satisfied (4–5 of 5) · avg ${f1(s.csatAvg)}`, cls(s.csat, 85, 70))}
+      ${tile('Resolution rate', s.resolved == null ? '—' : s.resolved + '%', `fully resolved · ${s.partly == null ? 0 : s.partly}% partly`, cls(s.resolved, 85, 70))}
+      ${tile('Response time', s.timely == null ? '—' : s.timely + '%', `satisfied with speed · avg ${f1(s.timelyAvg)}`, cls(s.timely, 85, 70))}
+      ${tile('NPS', s.nps == null ? '—' : (s.nps > 0 ? '+' : '') + s.nps, `${s.prom} promoters · ${s.pass} passive · ${s.det} detractors`, cls(s.nps, 50, 0))}
+      ${tile('Ease of getting help', s.easy == null ? '—' : s.easy + '%', `found it easy (4–5) · avg ${f1(s.effortAvg)}`, cls(s.easy, 85, 70))}
+      ${tile('Service quality', f1(avg([s.knowledge, s.clarity, s.courtesy].filter(x => x != null))), 'avg of knowledge, clarity, courtesy (of 5)', cls(avg([s.knowledge, s.clarity, s.courtesy].filter(x => x != null)), 4.3, 3.8))}
+      ${tile('Response rate', s.response == null ? '—' : s.response + '%', `${s.answered} answered of ${s.sent} sent`, '')}
+      ${tile('In the pipeline', String(queued), `waiting to send · ${skipped} skipped (90-day rule / no email)`, '')}
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>CSAT by month</h2><div class="note">% of customers satisfied (4–5), last 6 months. Number answered above each bar.</div>${trend(rows.filter(r => !agent || r.agent_name === agent))}</div>
+      <div class="card"><h2>Service quality</h2>${hbar('Knowledge', s.knowledge, 5)}${hbar('Clarity', s.clarity, 5)}${hbar('Courtesy', s.courtesy, 5)}
+        <h2 style="margin-top:14px;">Resolved?</h2>${['Yes', 'Partly', 'No'].map(x => { const a = list.filter(r => r.resolved); return hbar(x, pct(a.filter(r => r.resolved === x).length, a.length), 100, '%'); }).join('')}</div>
+    </div>
+    ${agents.length > 1 ? `<div class="card" style="margin-top:12px;"><h2>By agent</h2><table><thead><tr><th>Agent</th><th>Answered</th><th>CSAT</th><th>Resolved</th><th>Speed</th><th>Quality</th><th>Ease</th><th>NPS</th></tr></thead><tbody>${agents.map(a => { const x = stats(list.filter(r => (r.agent_name || 'Unassigned') === a));
+      return `<tr><td>${esc(a)}</td><td>${x.answered}</td><td>${x.csat ?? '—'}%</td><td>${x.resolved ?? '—'}%</td><td>${x.timely ?? '—'}%</td><td>${f1(avg([x.knowledge, x.clarity, x.courtesy].filter(y => y != null)))}</td><td>${x.easy ?? '—'}%</td><td>${x.nps ?? '—'}</td></tr>`; }).join('')}</tbody></table></div>` : ''}
+    <div class="card" style="margin-top:12px;"><h2>Latest comments</h2>${comments.length ? comments.map(r => `<div class="cmt"><div class="m">${new Date(r.answered_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} · ${esc(r.first_name || r.customer_name || 'Customer')} · <a href="${FD + encodeURIComponent(r.ticket_id)}" target="_blank" rel="noopener">#${esc(r.ticket_id)}</a>
+      <span class="pill">CSAT ${r.csat}/5</span><span class="pill">${esc(r.resolved || '')}</span><span class="pill">NPS ${r.nps}</span></div>${esc(r.comment)}</div>`).join('') : '<div class="note">No comments in this period.</div>'}</div>
+    <div class="card" style="margin-top:12px;"><h2>All responses</h2><div style="overflow-x:auto;"><table><thead><tr><th>Answered</th><th>Ticket</th><th>Customer</th><th>CSAT</th><th>Resolved</th><th>Speed</th><th>Know.</th><th>Clarity</th><th>Courtesy</th><th>Ease</th><th>NPS</th></tr></thead><tbody>
+      ${list.filter(r => r.answered_at).sort((a, b) => String(b.answered_at).localeCompare(a.answered_at)).map(r => `<tr><td>${new Date(r.answered_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td><td><a href="${FD + encodeURIComponent(r.ticket_id)}" target="_blank" rel="noopener">#${esc(r.ticket_id)}</a></td><td>${esc(r.first_name || r.customer_name || '')}</td><td>${r.csat}</td><td>${esc(r.resolved)}</td><td>${r.timeliness}</td><td>${r.knowledge ?? ''}</td><td>${r.clarity ?? ''}</td><td>${r.courtesy ?? ''}</td><td>${r.effort}</td><td>${r.nps}</td></tr>`).join('') || '<tr><td colspan="11" class="note">No answers yet in this period.</td></tr>'}
+    </tbody></table></div></div>`;
+}
+function exportXlsx() {
+  const go = () => {
+    const agent = document.getElementById('agent').value, list = rows.filter(r => inRange(r) && (!agent || r.agent_name === agent));
+    const s = stats(list), rangeTxt = document.getElementById('range').selectedOptions[0].text;
+    const sum = [['FX Airguns · Support KPIs'], ['Period', rangeTxt], ['Agent', agent || 'All agents'], [],
+      ['CSAT (% satisfied)', s.csat], ['Resolution rate (%)', s.resolved], ['Partly resolved (%)', s.partly], ['Satisfied with response time (%)', s.timely],
+      ['Knowledge (avg of 5)', s.knowledge], ['Clarity (avg of 5)', s.clarity], ['Courtesy (avg of 5)', s.courtesy], ['Found it easy (%)', s.easy], ['NPS', s.nps],
+      ['Surveys sent', s.sent], ['Answered', s.answered], ['Response rate (%)', s.response]];
+    const det = list.map(r => ({ Ticket: r.ticket_id, Customer: r.first_name || r.customer_name || '', Agent: r.agent_name || '', Status: r.status, Sent: r.sent_at ? r.sent_at.slice(0, 10) : '',
+      Answered: r.answered_at ? r.answered_at.slice(0, 10) : '', CSAT: r.csat, Resolved: r.resolved, 'Response time': r.timeliness, Knowledge: r.knowledge, Clarity: r.clarity, Courtesy: r.courtesy,
+      Ease: r.effort, NPS: r.nps, Comment: r.comment || '' }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sum), 'Summary');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(det), 'Responses');
+    XLSX.writeFile(wb, 'FX Support KPIs ' + new Date().toISOString().slice(0, 10) + '.xlsx');
+  };
+  if (window.XLSX) return go();
+  const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'; sc.onload = go; document.head.appendChild(sc);
+}
+async function signIn() {
+  const { error } = await sb.auth.signInWithPassword({ email: document.getElementById('em').value.trim(), password: document.getElementById('pw').value });
+  document.getElementById('aerr').textContent = error ? 'Login failed.' : '';
+}
+let started = false;
+sb.auth.onAuthStateChange((_e, session) => {
+  document.getElementById('auth').classList.toggle('hidden', !!session);
+  if (session && !started) { started = true; load(); sb.channel('kpi').on('postgres_changes', { event: '*', schema: 'public', table: 'support_surveys' }, () => load()).subscribe(); }
+});
+sb.auth.getSession().then(({ data }) => { if (data.session) { document.getElementById('auth').classList.add('hidden'); if (!started) { started = true; load(); } } });
+const SHELL_ORIGIN = 'https://fxairguns.netlify.app';
+window.addEventListener('message', async (event) => {
+  if (event.origin !== SHELL_ORIGIN || !event.data) return;
+  if (event.data.type === 'FX_AUTH_SESSION') await sb.auth.setSession({ access_token: event.data.access_token, refresh_token: event.data.refresh_token });
+  else if (event.data.type === 'FX_AUTH_LOGOUT') await sb.auth.signOut();
+});
+if (window.parent !== window) window.parent.postMessage({ type: 'FX_AUTH_READY' }, SHELL_ORIGIN);
+</script>
+</body>
+</html>
