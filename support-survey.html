@@ -58,7 +58,7 @@ async function load() {
     if (!r.ok) throw new Error(d.error || 'This survey link is not valid.');
     if (d.answered) return thanks('We already have your answers for this conversation.');
     app.innerHTML = `<h1>How did our support team do?</h1>
-      <p class="sub">${d.first ? 'Hi ' + esc(d.first) + ', thanks' : 'Thanks'} for contacting FX Airguns${d.subject ? ' about <b>' + esc(d.subject) + '</b>' : ''}. It takes about a minute.</p>
+      <p class="sub">${d.first ? 'Hi ' + esc(d.first) + ', thanks' : 'Thanks'} for reaching out to FX Airguns recently. It takes about a minute.</p>
       <form id="f" novalidate>
         ${q('1. Overall, how satisfied are you with the support you received?', scale('csat', 1, 5, 'Very dissatisfied', 'Very satisfied'))}
         ${q('2. Was your question or issue resolved?', choice('resolved', ['Yes', 'Partly', 'No']))}
