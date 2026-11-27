@@ -111,6 +111,22 @@ label.l{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mu
 .sec-h{width:100%;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;background:transparent;border:0;color:var(--text);text-align:left;min-height:48px}
 .sec.open .sec-h{background:var(--raised)}
 .sec-b{padding:6px 16px 16px;display:flex;flex-direction:column;gap:6px}
+.topcard{position:relative}
+.trkbox{display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
+@media (min-width:1250px){.trkbox{position:absolute;top:16px;right:16px;width:min(470px,36%);margin:0}.topcard .stages{max-width:calc(64% - 24px)}}
+.trk{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:10px;padding:9px 12px}
+.trk-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:12.5px;margin-bottom:7px}
+.trk-h b{font-size:13px}
+.trk-h a{color:var(--teal);text-decoration:none;font-variant-numeric:tabular-nums}
+.trk-steps{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+.trk-steps i{height:6px;border-radius:3px;background:var(--line2)}
+.trk-steps i.on{background:var(--teal)}
+.trk-steps i.done{background:var(--ok,#3fb27f)}
+.trk-steps i.bad{background:var(--bad,#e5484d)}
+.trk-lab{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;font-size:10.5px;color:var(--muted);margin-top:4px}
+.trk-lab span.cur{color:var(--text,#e6ebef);font-weight:600}
+.trk-sub{font-size:12px;color:var(--muted);margin-top:6px}
+.trk input{padding:5px 8px;font-size:12.5px}
 .stagebox{border:1px solid var(--line);border-radius:12px;background:var(--panel,#161a1e);overflow:hidden}
 .stagebox.now{border-color:var(--teal)}
 .stagebox.later .stage-hd{opacity:.6}
@@ -903,7 +919,8 @@ function renderRecordInner(keepScroll) {
       <h1>${r.freshdesk_ticket ? '#' + esc(r.freshdesk_ticket) + ' · ' : ''}${esc(r.customer_name || 'Unknown customer')}${r.model ? ' · ' + esc(r.model) : ''} ${r.is_test ? '<span class="pill test" style="vertical-align:middle;">TEST</span>' : ''}</h1>${siblingsHtml(r)}</div>
       <div class="bar">${r.report_sent_at ? `<span class="pill step">Report sent ${fmtDate(r.report_sent_at)}</span>` : ''}<button class="btn" onclick="recTab='Report';renderRecord(true)">Service Report</button>${r.is_test ? `<button class="btn ghost" onclick="deleteTestRecord()" title="Test records only">Delete test record</button>` : ''}</div>
     </div>
-    <div class="card" style="margin-top:14px;">
+    <div class="card topcard" style="margin-top:14px;">
+      ${trackingBox(r)}
       <div class="stages">${STEPS.map((s, i) => `<div class="stage ${i < si ? 'done' : i === si ? 'now' : ''}" role="button" tabindex="0" title="Go to this step" onclick="jumpStage('${s}')"><b>${esc(s === 'Received' && !r.received_at ? 'Incoming' : stepName(s))}</b><span>${st[s] ? fmtDate(st[s]) : (s === 'Received' && !r.received_at ? 'not arrived yet' : (i === si ? 'now' : ''))}</span></div>`).join('')}</div>
       ${c ? `<div class="clock"><div class="track ${c.late ? 'late' : c.warn ? 'warn' : ''}"><div style="width:${Math.min(100, c.day / CLOCK_DAYS * 100)}%"></div></div>
         <b>${c.done ? 'Shipped on day ' + c.day : 'Day ' + c.day + ' of ' + CLOCK_DAYS}${c.paused ? ' · paused' : ''}</b><span class="muted">Received ${fmtDate(r.received_at)} · due ${fmtDate(c.due.toISOString())}${c.late && !c.done ? ' · late' : ''}${c.paused ? ' · paused at Quote since ' + fmtDate(r.quote_pause_since) : ''}${c.pausedDays >= 0.05 ? ' · ' + daysTxt(c.pausedDays) + ' paused for the quote' : ''}</span></div>`
@@ -1287,6 +1304,62 @@ function stageSummary(r, t) {
   return '';
 }
 function setAsStatus(t) { document.querySelectorAll('.as-status').forEach(e => { e.textContent = t; }); }
+// ── FedEx tracking bars (inbound: rifle coming in · outbound: rifle going back) ──
+// Read live from FedEx through the server when the repair is opened (FedEx numbers only).
+const trkCache = {};   // tracking # -> { at, data } or { at, err }
+const TRK_STEPS = ['Label made', 'Picked up', 'In transit', 'Out for delivery', 'Delivered'];
+function trkStage(d, deliveredFlag) {
+  if (deliveredFlag) return 4;
+  if (!d) return 0;
+  const code = String(d.statusCode || '').toUpperCase(), st = String(d.status || '').toLowerCase();
+  if (d.appStatus === 'Delivered' || code === 'DL' || /delivered/.test(st)) return 4;
+  if (code === 'OD' || /out for delivery/.test(st)) return 3;
+  if (['IT', 'AR', 'DP', 'AF', 'IN'].includes(code) || /transit|departed|arrived|on the way|at local/.test(st)) return 2;
+  if (d.pickedUp || code === 'PU' || /picked up/.test(st)) return 1;
+  return 0;
+}
+function trkLoad(tn) {
+  const t = String(tn || '').replace(/\s+/g, '');
+  if (!t || /^1Z/i.test(t) || (trkCache[t] && Date.now() - trkCache[t].at < 10 * 60000) || (trkCache[t] && trkCache[t].busy)) return;
+  trkCache[t] = { at: Date.now(), busy: true };
+  fetch(SERVER + '/track?tracking=' + encodeURIComponent(t)).then(r => r.json()).then(d => { trkCache[t] = d && !d.error ? { at: Date.now(), data: d } : { at: Date.now(), err: (d && d.error) || 'No tracking info yet' }; })
+    .catch(e => { trkCache[t] = { at: Date.now(), err: 'Couldn’t reach FedEx' }; })
+    .finally(() => { const box = document.getElementById('trkbox'); const r = curRec(); if (box && r) box.outerHTML = trackingBox(r); });
+}
+function trkBar(title, tn, opts) {
+  const t = String(tn || '').replace(/\s+/g, '');
+  if (!t) return `<div class="trk"><div class="trk-h"><b>${title}</b><span class="muted">${opts.empty}</span></div>${opts.add || ''}</div>`;
+  const c = trkCache[t] || {}, d = c.data;
+  const stage = trkStage(d, opts.delivered), exc = d && /exception|delay/i.test(d.status || '') && stage < 4;
+  const fmtD = x => { try { return new Date(String(x).slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }); } catch (e) { return x; } };
+  const sub = opts.delivered ? opts.deliveredText
+    : c.busy ? 'Checking FedEx…' : c.err ? esc(c.err) : !d ? '' :
+    (stage === 4 ? 'Delivered' + (d.deliveryDate ? ' ' + fmtD(d.deliveryDate) : '') : (esc(d.status || '') + (d.deliveryDate ? ' · Expected ' + fmtD(d.deliveryDate) : '')));
+  return `<div class="trk"><div class="trk-h"><b>${title}</b><a href="https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(t)}" target="_blank" rel="noopener" title="Open on FedEx">FedEx ${esc(t)} ↗</a></div>
+    <div class="trk-steps" aria-hidden="true">${TRK_STEPS.map((x, i) => `<i class="${exc && i === stage ? 'bad' : stage === 4 ? 'done' : i < stage ? 'done' : i === stage ? 'on' : ''}"></i>`).join('')}</div>
+    <div class="trk-lab">${TRK_STEPS.map((x, i) => `<span class="${i === stage ? 'cur' : ''}">${x}</span>`).join('')}</div>
+    <div class="trk-sub" role="status">${sub}</div></div>`;
+}
+function trackingBox(r) {
+  const t = tickets.find(x => String(x.id) === String(r.repair_ticket_id)) || {};
+  const inb = t.incoming_tracking || '', outb = r.return_tracking || '';
+  if (inb && !r.received_at) trkLoad(inb);
+  if (outb && !r.delivered_at && /^\d+$/.test(String(outb).replace(/\s+/g, ''))) trkLoad(outb);
+  const add = r.repair_ticket_id && !r.received_at ? `<div class="bar" style="gap:6px;"><input id="trk-in" placeholder="Add incoming tracking #" style="flex:1;"><button class="btn sm" onclick="addIncomingTracking()">Save</button></div>` : '';
+  return `<div class="trkbox" id="trkbox">
+    ${trkBar('Inbound · rifle coming in', inb, { delivered: !!r.received_at, deliveredText: r.received_at ? 'Arrived ' + fmtDate(r.received_at) : '', empty: r.received_at ? 'Arrived ' + fmtDate(r.received_at) : 'No incoming tracking yet', add })}
+    ${trkBar('Outbound · rifle going back', outb, { delivered: !!r.delivered_at, deliveredText: r.delivered_at ? 'Delivered ' + fmtDate(r.delivered_at) : '', empty: 'No return label yet' })}
+  </div>`;
+}
+async function addIncomingTracking() {
+  const r = curRec(), v = (document.getElementById('trk-in') || {}).value || '', tn = v.replace(/\s+/g, '');
+  if (!r || !tn) return;
+  const t = tickets.find(x => String(x.id) === String(r.repair_ticket_id)); if (!t) return;
+  const { error } = await sb.from('repair_tickets').update({ incoming_tracking: tn }).eq('id', t.id);
+  if (error) return toast('Not saved: ' + error.message, true);
+  t.incoming_tracking = tn; await nrLinkInbound(t);
+  toast('Incoming tracking saved and added to the Inbound Tracker'); renderRecord(true);
+}
 function renderFlow(r) {
   const list = flowStages(r), cur = Math.max(0, list.indexOf(STEP_TAB[r.step] || 'Assessment'));
   // When the repair moves to a new step, fold everything and open the new current step
